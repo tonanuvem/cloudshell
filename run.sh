@@ -8,7 +8,7 @@ echo "\n\n Ajustando as pastas do CloudShell e a permissão do arquivo labsuser.
 if [ $(ls ~ | grep labsuser.pem | wc -l) = "1" ]
 then
   printf "\t\tARQUIVO labsuser.pem OK!\n\n"
-  mkdir ~/environment/
+  mkdir ~/environment/ && mkdir ~/environment/.aws/
   cp  ~/labsuser.pem ~/environment/labsuser.pem
   chmod 400 ~/environment/labsuser.pem
 else
