@@ -28,5 +28,5 @@ echo "region=us-east-1" >> credentials
 
 copy credentials ~/environment/.aws/credentials
 
-docker run --rm -ti --name webconfig --entrypoint /bin/sh -v -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
+docker run --rm -ti --name webconfig --entrypoint /bin/sh -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
 docker exec -ti webconfig /bin/bash
