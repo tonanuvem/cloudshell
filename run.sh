@@ -26,7 +26,7 @@ echo "AWS_SECRET_ACCESS_KEY=$(echo "$OUTPUT" | jq -r '.SecretAccessKey')" >> cre
 echo "AWS_SESSION_TOKEN=$(echo "$OUTPUT" | jq -r '.Token')" >> credentials
 echo "region=us-east-1" >> credentials
 
-copy credentials ~/environment/.aws/credentials
+cp credentials ~/environment/.aws/credentials
 
 docker run --rm -ti --name webconfig --entrypoint /bin/sh -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
 docker exec -ti webconfig /bin/bash
