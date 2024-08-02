@@ -11,7 +11,6 @@ then
   mkdir ~/environment/
   cp  ~/labsuser.pem ~/environment/labsuser.pem
   chmod 400 ~/environment/labsuser.pem
-  sh ~/environment/config/preparar.sh
 else
   echo "\t\tArquivo labsuser.pem não encontrado, você deve fazer o upload do arquivo para o CloudShell\n\n"
   exit
