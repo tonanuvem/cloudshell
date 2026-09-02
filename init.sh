@@ -14,6 +14,12 @@ PASTA_CRED="$PASTA_ENV/credenciais"
 # ------------------------------------------------------------
 # CLONAR CONFIG
 # ------------------------------------------------------------
+echo ""
+echo "============================================================"
+echo "    INICIALIZANDO AMBIENTE NO AWS CLOUDSHELL"
+echo "============================================================"
+echo ""
+
 if [ ! -d "$PASTA_CONFIG/.git" ]; then
     echo ""
     echo "📦 Clonando repositório tonanuvem/config..."
@@ -98,11 +104,7 @@ else
     echo "⚠️ Variáveis de ambiente do CloudShell não encontradas."
 fi
 
-echo ""
-echo "============================================================"
-echo "    INICIALIZANDO AMBIENTE NO AWS CLOUDSHELL"
-echo "============================================================"
-echo ""
+
 
 # ------------------------------------------------------------
 # 1. ESTRUTURA NO /tmp E CACHE DO TERRAFORM
