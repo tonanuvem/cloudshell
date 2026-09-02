@@ -149,7 +149,7 @@ echo ""
 echo ">> Terraform apply..."
 echo ""
 
-terraform -chdir="$TF_DIR" apply
+terraform -chdir="$TF_DIR" apply -auto-approve
 
 RC=$?
 
