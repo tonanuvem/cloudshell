@@ -1,3 +1,4 @@
+```bash
 #!/bin/bash
 
 # ============================================================
@@ -76,6 +77,7 @@ echo
 # ------------------------------------------------------------
 
 if ! grep -Rqs 'backend[[:space:]]*"s3"' "$TF_DIR"/*.tf 2>/dev/null; then
+
     echo "Criando backend.tf..."
 
     cat > "$TF_DIR/backend.tf" <<'BACKEND'
@@ -83,6 +85,7 @@ terraform {
   backend "s3" {}
 }
 BACKEND
+
 fi
 
 # ------------------------------------------------------------
@@ -166,6 +169,7 @@ else
 
     echo
     echo "Operação cancelada."
+
 fi
 
 echo
@@ -288,7 +292,7 @@ EOF
 
 
 # ============================================================
-# Função comum para descobrir instâncias Terraform
+# ligar.sh
 # ============================================================
 
 cat > "$HOME_DIR/ligar.sh" <<'EOF'
@@ -333,6 +337,7 @@ mapfile -t INSTANCES < <(
 
 if [ "${#INSTANCES[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform state."
+    echo "Execute ~/criar.sh primeiro."
     exit 1
 fi
 
@@ -436,6 +441,7 @@ mapfile -t INSTANCES < <(
 
 if [ "${#INSTANCES[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform state."
+    echo "Execute ~/criar.sh primeiro."
     exit 1
 fi
 
@@ -453,7 +459,7 @@ for INSTANCE_ID in "${INSTANCES[@]}"; do
 
     if [ "$STATE" = "running" ]; then
 
-        echo "Suspendo..."
+        echo "Suspendendo..."
 
         aws ec2 stop-instances \
             --instance-ids "$INSTANCE_ID" \
@@ -517,8 +523,16 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
+STATE_JSON=$(terraform -chdir="$TF_DIR" show -json 2>/dev/null)
+
+if [ $? -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "Terraform state ainda não foi inicializado."
+    echo "Execute ~/criar.sh primeiro."
+    exit 0
+fi
+
 mapfile -t INSTANCES < <(
-    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+    echo "$STATE_JSON" |
     jq -r '
         .values.root_module.resources[]?
         | select(.type=="aws_instance" and .name=="web")
@@ -548,6 +562,13 @@ for INSTANCE_ID in "${INSTANCES[@]}"; do
         --region "$AWS_REGION" \
         --query 'Reservations[0].Instances[0].[State.Name,InstanceType,PublicIpAddress,PrivateIpAddress]' \
         --output text)
+
+    if [ $? -ne 0 ]; then
+        printf "%-18s %-12s\n" \
+            "$INSTANCE_ID" \
+            "erro"
+        continue
+    fi
 
     STATE=$(echo "$DATA" | awk '{print $1}')
     TYPE=$(echo "$DATA" | awk '{print $2}')
@@ -615,8 +636,20 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
+if [ ! -d "$TF_DIR" ]; then
+    echo "Diretório Terraform não encontrado."
+    exit 1
+fi
+
+STATE_JSON=$(terraform -chdir="$TF_DIR" show -json 2>/dev/null)
+
+if [ $? -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "Terraform state ainda não foi inicializado."
+    exit 1
+fi
+
 mapfile -t INSTANCES < <(
-    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+    echo "$STATE_JSON" |
     jq -r '
         .values.root_module.resources[]?
         | select(.type=="aws_instance" and .name=="web")
@@ -683,8 +716,21 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 1
 fi
 
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado."
+    exit 1
+fi
+
+STATE_JSON=$(terraform -chdir="$TF_DIR" show -json 2>/dev/null)
+
+if [ $? -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "❌ Terraform state ainda não foi inicializado."
+    echo "Execute ~/criar.sh primeiro."
+    exit 1
+fi
+
 mapfile -t INSTANCES < <(
-    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+    echo "$STATE_JSON" |
     jq -r '
         .values.root_module.resources[]?
         | select(.type=="aws_instance" and .name=="web")
@@ -814,8 +860,16 @@ echo "Ansible:"
 
 echo
 
+STATE_JSON=$(terraform -chdir="$TF_DIR" show -json 2>/dev/null)
+
+if [ $? -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "❌ Terraform state ainda não foi inicializado."
+    echo "Execute ~/criar.sh primeiro."
+    exit 1
+fi
+
 mapfile -t INSTANCES < <(
-    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+    echo "$STATE_JSON" |
     jq -r '
         .values.root_module.resources[]?
         | select(.type=="aws_instance" and .name=="web")
@@ -1149,25 +1203,35 @@ EOF2
     fi
 
     if ! command -v terraform >/dev/null 2>&1; then
+
         install_terraform
+
     else
+
         echo
         echo "✓ Terraform encontrado."
         terraform --version | head -n 1
+
     fi
 
     if ! command -v ansible-playbook >/dev/null 2>&1; then
+
         install_ansible
+
     else
+
         echo
         echo "✓ Ansible encontrado."
         ansible-playbook --version | head -n 1
+
     fi
 
     if ! command -v jq >/dev/null 2>&1; then
+
         echo
         echo "⚠ jq não encontrado."
         echo "Os scripts de gerenciamento das VMs dependem dele."
+
     fi
 }
 
@@ -1190,7 +1254,7 @@ get_instances() {
         return 1
     fi
 
-    terraform -chdir="$TF_DIR" show -json |
+    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
         jq -r '
             .values.root_module.resources[]?
             | select(.type=="aws_instance" and .name=="web")
@@ -1200,7 +1264,7 @@ get_instances() {
 
 
 # ============================================================
-# Mostrar contexto AWS
+# Mostrar contexto AWS / Terraform / EC2 / Ansible
 # ============================================================
 
 show_context() {
@@ -1219,7 +1283,7 @@ show_context() {
         --query Arn \
         --output text)
 
-    if [ $? -eq 0 ] && [ -n "$ACCOUNT_ID" ]; then
+    if [ $? -eq 0 ] && [ -n "$ACCOUNT_ID" ] && [ "$ACCOUNT_ID" != "None" ]; then
 
         echo "AWS Account : $ACCOUNT_ID"
         echo "AWS Region  : $AWS_REGION"
@@ -1238,6 +1302,10 @@ show_context() {
 
     echo
 
+    # --------------------------------------------------------
+    # Ferramentas
+    # --------------------------------------------------------
+
     echo "------------------ FERRAMENTAS ------------------"
 
     if command -v terraform >/dev/null 2>&1; then
@@ -1247,11 +1315,17 @@ show_context() {
     fi
 
     if command -v ansible-playbook >/dev/null 2>&1; then
+
         echo "Ansible     : $(ansible-playbook --version | head -n 1)"
+
     elif [ -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
+
         echo "Ansible     : $("$ANSIBLE_VENV/bin/ansible-playbook" --version | head -n 1)"
+
     else
+
         echo "Ansible     : ❌ não instalado"
+
     fi
 
     if command -v aws >/dev/null 2>&1; then
@@ -1268,16 +1342,26 @@ show_context() {
 
     echo
 
+    # --------------------------------------------------------
+    # Terraform
+    # --------------------------------------------------------
+
     echo "------------------ TERRAFORM ------------------"
 
     echo "Diretório   : $TF_DIR"
 
     if [ -f "$TF_DIR/backend.tf" ]; then
+
         echo "Backend     : S3"
+
     elif [ -d "$TF_DIR" ]; then
+
         echo "Backend     : não configurado"
+
     else
+
         echo "Backend     : ❌ diretório não encontrado"
+
     fi
 
     echo "S3 State    : $TFSTATE_BUCKET"
@@ -1286,19 +1370,33 @@ show_context() {
 
     echo
 
+    # --------------------------------------------------------
+    # Ansible
+    # --------------------------------------------------------
+
     echo "------------------ ANSIBLE ------------------"
 
     if [ -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
+
         echo "Path        : $ANSIBLE_VENV/bin/ansible-playbook"
         echo "Status      : ✓ disponível"
+
     elif command -v ansible-playbook >/dev/null 2>&1; then
+
         echo "Path        : $(command -v ansible-playbook)"
         echo "Status      : ✓ disponível"
+
     else
+
         echo "Status      : ❌ indisponível"
+
     fi
 
     echo
+
+    # --------------------------------------------------------
+    # EC2
+    # --------------------------------------------------------
 
     echo "------------------ EC2 ------------------"
 
@@ -1316,70 +1414,97 @@ show_context() {
 
     else
 
-        mapfile -t INSTANCES < <(get_instances)
+        # ----------------------------------------------------
+        # Aqui está a correção:
+        #
+        # O erro do terraform show não aparece no terminal.
+        # Se o backend ainda não foi inicializado, mostramos
+        # uma mensagem amigável.
+        # ----------------------------------------------------
 
-        if [ "${#INSTANCES[@]}" -eq 0 ]; then
+        STATE_JSON=$(terraform -chdir="$TF_DIR" show -json 2>/dev/null)
+        TF_SHOW_RESULT=$?
 
-            echo "Nenhuma instância encontrada no Terraform state."
+        if [ "$TF_SHOW_RESULT" -ne 0 ] || [ -z "$STATE_JSON" ]; then
+
+            echo "Terraform state: ainda não inicializado."
+            echo "Execute a opção 1) Criar infraestrutura."
 
         else
 
-            printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
-                "#" \
-                "INSTANCE ID" \
-                "STATUS" \
-                "TIPO" \
-                "IP PÚBLICO" \
-                "IP PRIVADO"
+            mapfile -t INSTANCES < <(
+                echo "$STATE_JSON" |
+                jq -r '
+                    .values.root_module.resources[]?
+                    | select(.type=="aws_instance" and .name=="web")
+                    | .values.id
+                '
+            )
 
-            printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
-                "---" \
-                "--------------------" \
-                "------------" \
-                "------------" \
-                "------------------" \
-                "------------------"
+            if [ "${#INSTANCES[@]}" -eq 0 ]; then
 
-            NUM=1
+                echo "Nenhuma instância encontrada no Terraform state."
 
-            for INSTANCE_ID in "${INSTANCES[@]}"; do
+            else
 
-                DATA=$(aws ec2 describe-instances \
-                    --instance-ids "$INSTANCE_ID" \
-                    --region "$AWS_REGION" \
-                    --query 'Reservations[0].Instances[0].[State.Name,InstanceType,PublicIpAddress,PrivateIpAddress]' \
-                    --output text)
+                printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
+                    "#" \
+                    "INSTANCE ID" \
+                    "STATUS" \
+                    "TIPO" \
+                    "IP PÚBLICO" \
+                    "IP PRIVADO"
 
-                if [ $? -ne 0 ]; then
+                printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
+                    "---" \
+                    "--------------------" \
+                    "------------" \
+                    "------------" \
+                    "------------------" \
+                    "------------------"
 
-                    printf "%-5s %-20s %-12s\n" \
-                        "$NUM" \
-                        "$INSTANCE_ID" \
-                        "erro"
+                NUM=1
 
-                else
+                for INSTANCE_ID in "${INSTANCES[@]}"; do
 
-                    STATE=$(echo "$DATA" | awk '{print $1}')
-                    TYPE=$(echo "$DATA" | awk '{print $2}')
-                    PUBLIC_IP=$(echo "$DATA" | awk '{print $3}')
-                    PRIVATE_IP=$(echo "$DATA" | awk '{print $4}')
+                    DATA=$(aws ec2 describe-instances \
+                        --instance-ids "$INSTANCE_ID" \
+                        --region "$AWS_REGION" \
+                        --query 'Reservations[0].Instances[0].[State.Name,InstanceType,PublicIpAddress,PrivateIpAddress]' \
+                        --output text)
 
-                    [ "$PUBLIC_IP" = "None" ] && PUBLIC_IP="-"
-                    [ "$PRIVATE_IP" = "None" ] && PRIVATE_IP="-"
+                    if [ $? -ne 0 ]; then
 
-                    printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
-                        "$NUM" \
-                        "$INSTANCE_ID" \
-                        "$STATE" \
-                        "$TYPE" \
-                        "$PUBLIC_IP" \
-                        "$PRIVATE_IP"
+                        printf "%-5s %-20s %-12s\n" \
+                            "$NUM" \
+                            "$INSTANCE_ID" \
+                            "erro"
 
-                fi
+                    else
 
-                NUM=$((NUM + 1))
+                        STATE=$(echo "$DATA" | awk '{print $1}')
+                        TYPE=$(echo "$DATA" | awk '{print $2}')
+                        PUBLIC_IP=$(echo "$DATA" | awk '{print $3}')
+                        PRIVATE_IP=$(echo "$DATA" | awk '{print $4}')
 
-            done
+                        [ "$PUBLIC_IP" = "None" ] && PUBLIC_IP="-"
+                        [ "$PRIVATE_IP" = "None" ] && PRIVATE_IP="-"
+
+                        printf "%-5s %-20s %-12s %-12s %-18s %-18s\n" \
+                            "$NUM" \
+                            "$INSTANCE_ID" \
+                            "$STATE" \
+                            "$TYPE" \
+                            "$PUBLIC_IP" \
+                            "$PRIVATE_IP"
+
+                    fi
+
+                    NUM=$((NUM + 1))
+
+                done
+
+            fi
 
         fi
 
@@ -1408,6 +1533,7 @@ show_menu() {
     echo "  7) Destruir infraestrutura"
     echo "  0) Sair"
     echo
+
 }
 
 
@@ -1445,6 +1571,7 @@ run_action() {
             ;;
 
         6)
+
             echo
             echo "IP público:"
             "$HOME/ip"
@@ -1455,17 +1582,20 @@ run_action() {
             ;;
 
         0)
+
             echo
             echo "Saindo..."
             exit 0
             ;;
 
         *)
+
             echo
             echo "❌ Opção inválida."
             ;;
 
     esac
+
 }
 
 
@@ -1480,10 +1610,12 @@ echo "============================================================"
 
 echo
 echo "Verificando ferramentas..."
+
 ensure_tools
 
 echo
 echo "Inicialização concluída."
+
 
 # ============================================================
 # Loop principal
@@ -1509,11 +1641,17 @@ while true; do
     read -r -p "Pressione ENTER para atualizar o status e voltar ao menu..."
 
 done
-EOF
 
 
 # ============================================================
 # Permissões
+# ============================================================
+
+EOF
+
+
+# ============================================================
+# Permissões dos scripts
 # ============================================================
 
 chmod +x "$HOME_DIR/criar.sh"
