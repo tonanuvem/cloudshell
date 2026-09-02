@@ -250,7 +250,7 @@ echo ""
 echo ">> Terraform destroy..."
 echo ""
 
-terraform -chdir="$TF_DIR" destroy
+terraform -chdir="$TF_DIR" destroy -auto-approve
 
 RC=$?
 
