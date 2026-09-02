@@ -1532,11 +1532,9 @@ chmod +x "$HOME_DIR/fiaplab.sh"
 # ============================================================
 
 echo
-echo "============================================================"
-echo " Scripts criados com sucesso"
-echo "============================================================"
+echo "\tScripts criados com sucesso"
 echo
-echo "Para iniciar o laboratório:"
+echo "\tPara iniciar o laboratório:"
 echo
 echo "  ~/fiaplab.sh"
 echo
