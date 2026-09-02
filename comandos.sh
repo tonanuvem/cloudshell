@@ -2008,9 +2008,7 @@ chmod +x "$HOME_DIR/fiaplab.sh"
 # ============================================================
 
 echo ""
-echo "\t SCRIPTS GERADOS"
-echo ""
-echo "Execute:"
-echo ""
-echo "  ~/fiaplab.sh"
+echo "========================================" 
+echo " SCRIPTS GERADOS" 
+echo "========================================" 
 echo ""
