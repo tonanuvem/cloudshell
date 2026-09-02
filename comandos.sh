@@ -1,157 +1,167 @@
 #!/bin/bash
 
 # ============================================================
+# COMANDOS CLOUDSHELL
+#
+# Este script é chamado pelo:
+#   ~/cloudshell/init.sh
+#
+# Ele cria os scripts auxiliares diretamente em $HOME:
+#
+#   ~/criar.sh
+#   ~/destruir.sh
+#   ~/ligar.sh
+#   ~/suspender.sh
+#   ~/status.sh
+#   ~/ip
+#   ~/conectar.sh
+#   ~/ansible.sh
+#
+# Não utiliza:
+#   - set -e
+#   - source de outro arquivo de configuração
+#   - ~/.fiaplab/comandos.sh
+# ============================================================
+
+
+# ============================================================
 # CONFIGURAÇÕES
 # ============================================================
 
-HOME_DIR="$HOME"
-FIAPLAB_DIR="$HOME/.fiaplab"
 TF_DIR="$HOME/environment/config/ubuntu-vm"
-SSH_KEY="$HOME/labsuser.pem"
+SSH_KEY="$HOME/environment/labsuser.pem"
+
+AWS_REGION="${AWS_REGION:-us-east-1}"
+
+ACCOUNT_ID="$(aws sts get-caller-identity \
+    --query Account \
+    --output text 2>/dev/null)"
+
+TFSTATE_BUCKET="tfstate-cloudshell-${ACCOUNT_ID}"
+TFSTATE_TABLE="terraform-locks"
+TFSTATE_KEY="ubuntu-vm/terraform.tfstate"
+
 
 # ============================================================
-# VALIDAR AMBIENTE
-# ============================================================
-
-echo ""
-echo "============================================================"
-echo " CONFIGURANDO AMBIENTE FIAPLAB"
-echo "============================================================"
-echo ""
-
-if [ ! -d "$HOME/environment" ]; then
-    echo "❌ Diretório não encontrado:"
-    echo "$HOME/environment"
-    echo ""
-    echo "Verifique se o projeto config foi clonado corretamente."
-    exit 1
-fi
-
-if [ ! -d "$TF_DIR" ]; then
-    echo "❌ Diretório Terraform não encontrado:"
-    echo "$TF_DIR"
-    echo ""
-    exit 1
-fi
-
-if [ ! -f "$SSH_KEY" ]; then
-    echo "⚠️ Chave SSH não encontrada:"
-    echo "$SSH_KEY"
-    echo ""
-    echo "Os scripts serão criados, mas SSH/Ansible não funcionarão"
-    echo "até que labsuser.pem esteja disponível."
-    echo ""
-else
-    chmod 400 "$SSH_KEY"
-fi
-
-# ============================================================
-# CRIAR DIRETÓRIO AUXILIAR
-# ============================================================
-
-mkdir -p "$FIAPLAB_DIR"
-
-# ============================================================
-# CONFIG.SH
-# ============================================================
-
-cat > "$FIAPLAB_DIR/config.sh" <<'EOF'
-#!/bin/bash
-
-# ============================================================
-# CONFIGURAÇÕES CENTRAIS
-# ============================================================
-
-export TF_DIR="$HOME/environment/config/ubuntu-vm"
-export SSH_KEY="$HOME/labsuser.pem"
-export SSH_USER="ubuntu"
-export AWS_REGION="us-east-1"
-EOF
-
-chmod +x "$FIAPLAB_DIR/config.sh"
-
-# ============================================================
-# GET_INSTANCES.SH
-# ============================================================
-
-cat > "$FIAPLAB_DIR/get_instances.sh" <<'EOF'
-#!/bin/bash
-
-source "$HOME/.fiaplab/config.sh"
-
-cd "$TF_DIR" || exit 1
-
-terraform show -json 2>/dev/null |
-jq -r '
-    .values.root_module.resources[]?
-    | select(.type=="aws_instance" and .name=="web")
-    | .values.id
-'
-EOF
-
-chmod +x "$FIAPLAB_DIR/get_instances.sh"
-
-# ============================================================
-# CRIAR.SH
+# CRIAR
 # ============================================================
 
 cat > "$HOME/criar.sh" <<'EOF'
 #!/bin/bash
 
-set -e
+# ============================================================
+# CRIAR INFRAESTRUTURA
+# ============================================================
 
-source "$HOME/.fiaplab/config.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-cd "$TF_DIR" || exit 1
+AWS_REGION="${AWS_REGION:-us-east-1}"
+
+ACCOUNT_ID="$(aws sts get-caller-identity \
+    --query Account \
+    --output text)"
+
+TFSTATE_BUCKET="tfstate-cloudshell-${ACCOUNT_ID}"
+TFSTATE_TABLE="terraform-locks"
+TFSTATE_KEY="ubuntu-vm/terraform.tfstate"
+
 
 echo ""
-echo "============================================================"
+echo "=========================================="
+echo " CRIAR INFRAESTRUTURA"
+echo "=========================================="
+echo ""
+
+echo "AWS Account : $ACCOUNT_ID"
+echo "AWS Region  : $AWS_REGION"
+echo "S3 Bucket   : $TFSTATE_BUCKET"
+echo "DynamoDB    : $TFSTATE_TABLE"
+echo "TF State    : $TFSTATE_KEY"
+echo ""
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
+    exit 1
+fi
+
+cd "$TF_DIR"
+
+# ============================================================
+# BACKEND
+# ============================================================
+
+if ! grep -Rqs 'backend[[:space:]]*"s3"' "$TF_DIR"/*.tf 2>/dev/null; then
+
+    cat > "$TF_DIR/backend.tf" <<'BACKEND'
+terraform {
+  backend "s3" {}
+}
+BACKEND
+
+    echo "✓ backend.tf criado."
+
+else
+
+    echo "✓ Backend S3 já configurado."
+
+fi
+
+echo ""
+echo "=========================================="
 echo " TERRAFORM INIT"
-echo "============================================================"
+echo "=========================================="
 echo ""
 
-terraform init
+terraform init \
+    -reconfigure \
+    -backend-config="bucket=$TFSTATE_BUCKET" \
+    -backend-config="key=$TFSTATE_KEY" \
+    -backend-config="region=$AWS_REGION" \
+    -backend-config="dynamodb_table=$TFSTATE_TABLE"
 
 echo ""
-echo "============================================================"
+echo "=========================================="
 echo " TERRAFORM VALIDATE"
-echo "============================================================"
+echo "=========================================="
 echo ""
 
 terraform validate
 
 echo ""
-echo "============================================================"
+echo "=========================================="
 echo " TERRAFORM PLAN"
-echo "============================================================"
+echo "=========================================="
 echo ""
 
 terraform plan
 
 echo ""
-echo "============================================================"
-echo " APLICAR ALTERAÇÕES"
-echo "============================================================"
+echo "=========================================="
+echo " CONFIRMAÇÃO"
+echo "=========================================="
 echo ""
 
-read -r -p "Deseja executar terraform apply? [s/N]: " CONFIRM
+read -r -p "Deseja executar terraform apply? [s/N]: " CONFIRMA
 
-case "$CONFIRM" in
-    s|S|sim|SIM|Sim)
-        ;;
-    *)
-        echo ""
-        echo "Operação cancelada."
-        exit 0
-        ;;
-esac
+if [[ ! "$CONFIRMA" =~ ^[sS]$ ]]; then
+    echo ""
+    echo "Operação cancelada."
+    exit 0
+fi
+
+echo ""
+echo "=========================================="
+echo " TERRAFORM APPLY"
+echo "=========================================="
+echo ""
 
 terraform apply -auto-approve
 
 echo ""
-echo "============================================================"
-echo " ✅ INFRAESTRUTURA CRIADA"
-echo "============================================================"
+echo "=========================================="
+echo " INFRAESTRUTURA CRIADA"
+echo "=========================================="
 echo ""
 
 "$HOME/status.sh"
@@ -159,292 +169,386 @@ EOF
 
 chmod +x "$HOME/criar.sh"
 
+
 # ============================================================
-# DESTRUIR.SH
+# DESTRUIR
 # ============================================================
 
 cat > "$HOME/destruir.sh" <<'EOF'
 #!/bin/bash
 
-set -e
+# ============================================================
+# DESTRUIR INFRAESTRUTURA
+# ============================================================
 
-source "$HOME/.fiaplab/config.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-cd "$TF_DIR" || exit 1
+AWS_REGION="${AWS_REGION:-us-east-1}"
+
+ACCOUNT_ID="$(aws sts get-caller-identity \
+    --query Account \
+    --output text)"
+
+TFSTATE_BUCKET="tfstate-cloudshell-${ACCOUNT_ID}"
+TFSTATE_TABLE="terraform-locks"
+TFSTATE_KEY="ubuntu-vm/terraform.tfstate"
+
 
 echo ""
-echo "============================================================"
+echo "=========================================="
+echo " DESTRUIR INFRAESTRUTURA"
+echo "=========================================="
+echo ""
+
+echo "AWS Account : $ACCOUNT_ID"
+echo "AWS Region  : $AWS_REGION"
+echo "S3 Bucket   : $TFSTATE_BUCKET"
+echo "DynamoDB    : $TFSTATE_TABLE"
+echo ""
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
+    exit 1
+fi
+
+cd "$TF_DIR"
+
+# ============================================================
+# BACKEND
+# ============================================================
+
+if ! grep -Rqs 'backend[[:space:]]*"s3"' "$TF_DIR"/*.tf 2>/dev/null; then
+
+    cat > "$TF_DIR/backend.tf" <<'BACKEND'
+terraform {
+  backend "s3" {}
+}
+BACKEND
+
+    echo "✓ backend.tf criado."
+
+fi
+
+echo ""
+echo "Inicializando Terraform..."
+echo ""
+
+terraform init \
+    -reconfigure \
+    -backend-config="bucket=$TFSTATE_BUCKET" \
+    -backend-config="key=$TFSTATE_KEY" \
+    -backend-config="region=$AWS_REGION" \
+    -backend-config="dynamodb_table=$TFSTATE_TABLE"
+
+echo ""
+echo "Recursos atualmente gerenciados:"
+echo ""
+
+terraform state list
+
+echo ""
+echo "=========================================="
 echo " ATENÇÃO"
-echo "============================================================"
+echo "=========================================="
 echo ""
-echo "Este comando irá destruir TODOS os recursos gerenciados"
-echo "pelo Terraform neste diretório:"
-echo ""
-echo "$TF_DIR"
+echo "Esta operação irá destruir os recursos"
+echo "gerenciados por este Terraform."
 echo ""
 
-read -r -p "Digite DESTROY para confirmar: " CONFIRM
+read -r -p "Deseja realmente destruir tudo? [s/N]: " CONFIRMA
 
-if [ "$CONFIRM" != "DESTROY" ]; then
+if [[ ! "$CONFIRMA" =~ ^[sS]$ ]]; then
     echo ""
     echo "Operação cancelada."
     exit 0
 fi
 
 echo ""
-echo "============================================================"
-echo " TERRAFORM DESTROY"
-echo "============================================================"
+echo "Destruindo infraestrutura..."
 echo ""
 
-terraform destroy
+terraform destroy -auto-approve
 
 echo ""
-echo "============================================================"
-echo " ✅ RECURSOS DESTRUÍDOS"
-echo "============================================================"
+echo "=========================================="
+echo " INFRAESTRUTURA DESTRUÍDA"
+echo "=========================================="
 echo ""
 EOF
 
 chmod +x "$HOME/destruir.sh"
 
+
 # ============================================================
-# LIGAR.SH
+# LIGAR
 # ============================================================
 
 cat > "$HOME/ligar.sh" <<'EOF'
 #!/bin/bash
 
-set -e
+# ============================================================
+# LIGAR INSTÂNCIAS
+# ============================================================
 
-source "$HOME/.fiaplab/config.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
-if [ ! -x "$GET_INSTANCES" ]; then
-    echo "❌ get_instances.sh não encontrado."
+
+echo ""
+echo "=========================================="
+echo " LIGAR INSTÂNCIAS"
+echo "=========================================="
+echo ""
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
     exit 1
 fi
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
+cd "$TF_DIR"
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
-    echo ""
-    echo "❌ Nenhuma instância encontrada no Terraform."
-    echo ""
-    exit 1
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
+
+if [ "${#INSTANCES[@]}" -eq 0 ]; then
+    echo "Nenhuma instância encontrada no Terraform."
+    exit 0
 fi
 
-echo ""
-echo "============================================================"
-echo " LIGANDO INSTÂNCIAS"
-echo "============================================================"
-echo ""
+for INSTANCE_ID in "${INSTANCES[@]}"; do
 
-for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
+    [ -z "$INSTANCE_ID" ] && continue
 
-    STATE="$(
-        aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text
-    )"
+    STATE=$(aws ec2 describe-instances \
+        --instance-ids "$INSTANCE_ID" \
+        --region "$AWS_REGION" \
+        --query 'Reservations[0].Instances[0].State.Name' \
+        --output text)
 
-    echo "Instância: $INSTANCE_ID"
-    echo "Estado atual: $STATE"
-
-    if [ "$STATE" = "running" ]; then
-        echo "Já está ligada."
-        echo ""
-        continue
-    fi
+    echo "$INSTANCE_ID -> $STATE"
 
     if [ "$STATE" = "stopped" ]; then
 
+        echo "Ligando $INSTANCE_ID..."
+
         aws ec2 start-instances \
             --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            >/dev/null
+            --region "$AWS_REGION"
 
-        echo "Aguardando instância ficar disponível..."
+        echo ""
+        echo "Aguardando instância iniciar..."
+        echo ""
 
         aws ec2 wait instance-running \
             --instance-ids "$INSTANCE_ID" \
             --region "$AWS_REGION"
 
-        echo "✅ Instância ligada."
-        echo ""
+        echo "✓ $INSTANCE_ID ligada."
+
+    elif [ "$STATE" = "running" ]; then
+
+        echo "✓ $INSTANCE_ID já está ligada."
 
     else
-        echo "⚠️ Estado não tratado: $STATE"
-        echo ""
+
+        echo "⚠️ Estado atual: $STATE"
+
     fi
 
+    echo ""
+
 done
-
-echo "============================================================"
-echo " STATUS"
-echo "============================================================"
-echo ""
-
-"$HOME/status.sh"
 EOF
 
 chmod +x "$HOME/ligar.sh"
 
+
 # ============================================================
-# SUSPENDER.SH
+# SUSPENDER
 # ============================================================
 
 cat > "$HOME/suspender.sh" <<'EOF'
 #!/bin/bash
 
-set -e
+# ============================================================
+# SUSPENDER INSTÂNCIAS
+# ============================================================
 
-source "$HOME/.fiaplab/config.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
-if [ ! -x "$GET_INSTANCES" ]; then
-    echo "❌ get_instances.sh não encontrado."
+
+echo ""
+echo "=========================================="
+echo " SUSPENDER INSTÂNCIAS"
+echo "=========================================="
+echo ""
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
     exit 1
 fi
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
+cd "$TF_DIR"
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
-    echo ""
-    echo "❌ Nenhuma instância encontrada no Terraform."
-    echo ""
-    exit 1
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
+
+if [ "${#INSTANCES[@]}" -eq 0 ]; then
+    echo "Nenhuma instância encontrada no Terraform."
+    exit 0
 fi
 
-echo ""
-echo "============================================================"
-echo " SUSPENDENDO INSTÂNCIAS"
-echo "============================================================"
-echo ""
+for INSTANCE_ID in "${INSTANCES[@]}"; do
 
-for INSTANCE_ID in "${INSTANCE_IDS[@]}"; do
+    [ -z "$INSTANCE_ID" ] && continue
 
-    STATE="$(
-        aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text
-    )"
+    STATE=$(aws ec2 describe-instances \
+        --instance-ids "$INSTANCE_ID" \
+        --region "$AWS_REGION" \
+        --query 'Reservations[0].Instances[0].State.Name' \
+        --output text)
 
-    echo "Instância: $INSTANCE_ID"
-    echo "Estado atual: $STATE"
-
-    if [ "$STATE" = "stopped" ]; then
-        echo "Já está desligada."
-        echo ""
-        continue
-    fi
+    echo "$INSTANCE_ID -> $STATE"
 
     if [ "$STATE" = "running" ]; then
 
+        echo "Suspendendo $INSTANCE_ID..."
+
         aws ec2 stop-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            >/dev/null
-
-        echo "Aguardando instância parar..."
-
-        aws ec2 wait instance-stopped \
             --instance-ids "$INSTANCE_ID" \
             --region "$AWS_REGION"
 
-        echo "✅ Instância suspensa."
-        echo ""
+        echo "✓ Comando de suspensão enviado."
+
+    elif [ "$STATE" = "stopped" ]; then
+
+        echo "✓ $INSTANCE_ID já está desligada."
 
     else
-        echo "⚠️ Estado não tratado: $STATE"
-        echo ""
+
+        echo "⚠️ Estado atual: $STATE"
+
     fi
 
+    echo ""
+
 done
-
-echo "============================================================"
-echo " STATUS"
-echo "============================================================"
-echo ""
-
-"$HOME/status.sh"
 EOF
 
 chmod +x "$HOME/suspender.sh"
 
+
 # ============================================================
-# STATUS.SH
+# STATUS
 # ============================================================
 
 cat > "$HOME/status.sh" <<'EOF'
 #!/bin/bash
 
-source "$HOME/.fiaplab/config.sh"
+# ============================================================
+# STATUS DAS INSTÂNCIAS
+# ============================================================
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-if [ ! -x "$GET_INSTANCES" ]; then
-    echo "❌ get_instances.sh não encontrado."
+AWS_REGION="${AWS_REGION:-us-east-1}"
+
+
+echo ""
+echo "=========================================="
+echo " STATUS DAS INSTÂNCIAS"
+echo "=========================================="
+echo ""
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
     exit 1
 fi
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
+cd "$TF_DIR"
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
-    echo ""
-    echo "❌ Nenhuma instância encontrada no Terraform."
-    echo ""
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
+
+if [ "${#INSTANCES[@]}" -eq 0 ]; then
+    echo "Nenhuma instância encontrada no Terraform."
     exit 0
 fi
 
-echo ""
-echo "============================================================"
-echo " STATUS DAS VMs"
-echo "============================================================"
-echo ""
+printf "%-18s %-12s %-12s %-16s %-16s\n" \
+    "INSTANCE ID" "STATUS" "TIPO" "IP PÚBLICO" "IP PRIVADO"
 
-for i in "${!INSTANCE_IDS[@]}"; do
+echo "--------------------------------------------------------------------------------"
 
-    INSTANCE_ID="${INSTANCE_IDS[$i]}"
+for INSTANCE_ID in "${INSTANCES[@]}"; do
+
+    [ -z "$INSTANCE_ID" ] && continue
 
     aws ec2 describe-instances \
         --instance-ids "$INSTANCE_ID" \
         --region "$AWS_REGION" \
         --query 'Reservations[0].Instances[0].[InstanceId,State.Name,InstanceType,PublicIpAddress,PrivateIpAddress]' \
-        --output table
+        --output text |
+    awk '{
+        printf "%-18s %-12s %-12s %-16s %-16s\n",
+        $1, $2, $3, ($4=="None" ? "-" : $4), ($5=="None" ? "-" : $5)
+    }'
 
-    PUBLIC_IP="$(
-        aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text
-    )"
+done
 
-    STATE="$(
-        aws ec2 describe-instances \
-            --instance-ids "$INSTANCE_ID" \
-            --region "$AWS_REGION" \
-            --query 'Reservations[0].Instances[0].State.Name' \
-            --output text
-    )"
+echo ""
+echo "URLs das instâncias em execução:"
+echo ""
+
+for INSTANCE_ID in "${INSTANCES[@]}"; do
+
+    [ -z "$INSTANCE_ID" ] && continue
+
+    INFO=$(aws ec2 describe-instances \
+        --instance-ids "$INSTANCE_ID" \
+        --region "$AWS_REGION" \
+        --query 'Reservations[0].Instances[0].[State.Name,PublicIpAddress]' \
+        --output text)
+
+    STATE=$(echo "$INFO" | awk '{print $1}')
+    PUBLIC_IP=$(echo "$INFO" | awk '{print $2}')
 
     if [ "$STATE" = "running" ] && [ "$PUBLIC_IP" != "None" ]; then
-        echo "VM $((i + 1)):"
-        echo "  http://$PUBLIC_IP"
-        echo ""
+        echo "http://$PUBLIC_IP"
     fi
 
 done
+
+echo ""
 EOF
 
 chmod +x "$HOME/status.sh"
+
 
 # ============================================================
 # IP
@@ -453,175 +557,231 @@ chmod +x "$HOME/status.sh"
 cat > "$HOME/ip" <<'EOF'
 #!/bin/bash
 
-source "$HOME/.fiaplab/config.sh"
+# ============================================================
+# IP PÚBLICO DA PRIMEIRA INSTÂNCIA
+# ============================================================
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
+
+if [ ! -d "$TF_DIR" ]; then
     echo "Desligada"
     exit 0
 fi
 
-INSTANCE_ID="${INSTANCE_IDS[0]}"
+cd "$TF_DIR"
 
-STATE="$(
-    aws ec2 describe-instances \
-        --instance-ids "$INSTANCE_ID" \
-        --region "$AWS_REGION" \
-        --query 'Reservations[0].Instances[0].State.Name' \
-        --output text 2>/dev/null
-)"
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
 
-if [ "$STATE" != "running" ]; then
+if [ "${#INSTANCES[@]}" -eq 0 ]; then
     echo "Desligada"
     exit 0
 fi
 
-PUBLIC_IP="$(
-    aws ec2 describe-instances \
+for INSTANCE_ID in "${INSTANCES[@]}"; do
+
+    [ -z "$INSTANCE_ID" ] && continue
+
+    INFO=$(aws ec2 describe-instances \
         --instance-ids "$INSTANCE_ID" \
         --region "$AWS_REGION" \
-        --query 'Reservations[0].Instances[0].PublicIpAddress' \
-        --output text 2>/dev/null
-)"
+        --query 'Reservations[0].Instances[0].[State.Name,PublicIpAddress]' \
+        --output text)
 
-if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
-    echo "Desligada"
-else
-    echo "$PUBLIC_IP"
-fi
+    STATE=$(echo "$INFO" | awk '{print $1}')
+    PUBLIC_IP=$(echo "$INFO" | awk '{print $2}')
+
+    if [ "$STATE" = "running" ] && [ "$PUBLIC_IP" != "None" ]; then
+        echo "$PUBLIC_IP"
+        exit 0
+    fi
+
+done
+
+echo "Desligada"
 EOF
 
 chmod +x "$HOME/ip"
 
+
 # ============================================================
-# CONECTAR.SH
+# CONECTAR
 # ============================================================
 
 cat > "$HOME/conectar.sh" <<'EOF'
 #!/bin/bash
 
-source "$HOME/.fiaplab/config.sh"
+# ============================================================
+# CONECTAR VIA SSH
+#
+# Uso:
+#   ~/conectar.sh
+#   ~/conectar.sh 2
+#   ~/conectar.sh 3
+# ============================================================
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+TF_DIR="$HOME/environment/config/ubuntu-vm"
+SSH_KEY="$HOME/environment/labsuser.pem"
 
-if [ ! -x "$GET_INSTANCES" ]; then
-    echo "❌ get_instances.sh não encontrado."
-    exit 1
-fi
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
+NUMERO="${1:-1}"
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
-    echo ""
-    echo "❌ Nenhuma instância encontrada."
-    exit 1
-fi
 
-VM_NUMBER="${1:-1}"
+if ! [[ "$NUMERO" =~ ^[0-9]+$ ]] || [ "$NUMERO" -lt 1 ]; then
 
-if ! [[ "$VM_NUMBER" =~ ^[0-9]+$ ]]; then
-    echo "❌ Número da VM inválido."
-    echo ""
-    echo "Exemplo:"
+    echo "Uso:"
     echo "  ~/conectar.sh"
     echo "  ~/conectar.sh 2"
+
     exit 1
+
 fi
 
-if [ "$VM_NUMBER" -lt 1 ] || [ "$VM_NUMBER" -gt "${#INSTANCE_IDS[@]}" ]; then
-    echo ""
-    echo "❌ VM $VM_NUMBER não existe."
-    echo ""
-    echo "VMs disponíveis: 1 até ${#INSTANCE_IDS[@]}"
+
+if [ ! -d "$TF_DIR" ]; then
+
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
+
     exit 1
+
 fi
 
-INDEX=$((VM_NUMBER - 1))
-INSTANCE_ID="${INSTANCE_IDS[$INDEX]}"
+cd "$TF_DIR"
 
-STATE="$(
-    aws ec2 describe-instances \
-        --instance-ids "$INSTANCE_ID" \
-        --region "$AWS_REGION" \
-        --query 'Reservations[0].Instances[0].State.Name' \
-        --output text
-)"
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
+
+TOTAL="${#INSTANCES[@]}"
+
+if [ "$TOTAL" -eq 0 ]; then
+
+    echo "❌ Nenhuma instância encontrada no Terraform."
+
+    exit 1
+
+fi
+
+if [ "$NUMERO" -gt "$TOTAL" ]; then
+
+    echo "❌ Instância $NUMERO não existe."
+    echo "Total de instâncias: $TOTAL"
+
+    exit 1
+
+fi
+
+
+INSTANCE_ID="${INSTANCES[$((NUMERO - 1))]}"
+
+
+INFO=$(aws ec2 describe-instances \
+    --instance-ids "$INSTANCE_ID" \
+    --region "$AWS_REGION" \
+    --query 'Reservations[0].Instances[0].[State.Name,PublicIpAddress]' \
+    --output text)
+
+STATE=$(echo "$INFO" | awk '{print $1}')
+PUBLIC_IP=$(echo "$INFO" | awk '{print $2}')
+
 
 if [ "$STATE" != "running" ]; then
-    echo ""
-    echo "❌ A VM $VM_NUMBER não está ligada."
-    echo ""
-    echo "Estado: $STATE"
+
+    echo "❌ A instância $INSTANCE_ID não está ligada."
+    echo "Estado atual: $STATE"
     echo ""
     echo "Execute:"
     echo "  ~/ligar.sh"
+
     exit 1
+
 fi
 
-PUBLIC_IP="$(
-    aws ec2 describe-instances \
-        --instance-ids "$INSTANCE_ID" \
-        --region "$AWS_REGION" \
-        --query 'Reservations[0].Instances[0].PublicIpAddress' \
-        --output text
-)"
 
-if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
-    echo ""
-    echo "❌ A VM não possui IP público."
+if [ "$PUBLIC_IP" = "None" ] || [ -z "$PUBLIC_IP" ]; then
+
+    echo "❌ A instância não possui IP público."
+
     exit 1
+
 fi
+
 
 if [ ! -f "$SSH_KEY" ]; then
-    echo ""
+
     echo "❌ Chave SSH não encontrada:"
-    echo "$SSH_KEY"
+    echo "   $SSH_KEY"
+
     exit 1
+
 fi
+
 
 chmod 400 "$SSH_KEY"
 
+
 echo ""
-echo "============================================================"
-echo " CONECTANDO À VM $VM_NUMBER"
-echo "============================================================"
+echo "=========================================="
+echo " CONECTANDO"
+echo "=========================================="
 echo ""
-echo "Instance ID: $INSTANCE_ID"
-echo "IP:          $PUBLIC_IP"
+
+echo "Instância : #$NUMERO"
+echo "ID        : $INSTANCE_ID"
+echo "IP        : $PUBLIC_IP"
 echo ""
 
 ssh \
     -i "$SSH_KEY" \
     -o StrictHostKeyChecking=no \
-    "$SSH_USER@$PUBLIC_IP"
+    ubuntu@"$PUBLIC_IP"
 EOF
 
 chmod +x "$HOME/conectar.sh"
 
+
 # ============================================================
-# ANISBLE.SH
+# ANSIBLE
 # ============================================================
 
 cat > "$HOME/ansible.sh" <<'EOF'
 #!/bin/bash
 
 # ============================================================
-# CONFIGURAÇÕES
+# ANSIBLE
 # ============================================================
 
-export ANSIBLE_PYTHON_INTERPRETER=auto_silent
-export ANSIBLE_DEPRECATION_WARNINGS=false
-export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
+TF_DIR="$HOME/environment/config/ubuntu-vm"
+SSH_KEY="$HOME/environment/labsuser.pem"
 
-source "$HOME/.fiaplab/config.sh"
+AWS_REGION="${AWS_REGION:-us-east-1}"
 
-cd "$TF_DIR" || exit 1
+
+echo ""
+echo "=========================================="
+echo " ANSIBLE"
+echo "=========================================="
+echo ""
+
 
 # ============================================================
-# LOCALIZAR ANSIBLE
+# Localizar ansible-playbook
 # ============================================================
 
 ANSIBLE_PLAYBOOK="$(command -v ansible-playbook 2>/dev/null || true)"
@@ -629,381 +789,380 @@ ANSIBLE_PLAYBOOK="$(command -v ansible-playbook 2>/dev/null || true)"
 if [ -z "$ANSIBLE_PLAYBOOK" ]; then
 
     if [ -x "/tmp/fiap/ansible_venv/bin/ansible-playbook" ]; then
+
         ANSIBLE_PLAYBOOK="/tmp/fiap/ansible_venv/bin/ansible-playbook"
+
     else
-        echo ""
+
         echo "❌ ansible-playbook não encontrado!"
         echo ""
         echo "Verifique a instalação do Ansible no CloudShell."
+
         exit 1
+
     fi
 
 fi
 
-echo ""
+
 echo "ANSIBLE:"
 echo "$ANSIBLE_PLAYBOOK"
 echo ""
 
+
 # ============================================================
-# LOCALIZAR COMANDO ANSIBLE
+# Localizar ansible
 # ============================================================
 
-ANSIBLE_BIN="$(dirname "$ANSIBLE_PLAYBOOK")/ansible"
+ANSIBLE="$(command -v ansible 2>/dev/null || true)"
 
-if [ ! -x "$ANSIBLE_BIN" ]; then
-    ANSIBLE_BIN="$(command -v ansible 2>/dev/null || true)"
+if [ -z "$ANSIBLE" ]; then
+
+    if [ -x "/tmp/fiap/ansible_venv/bin/ansible" ]; then
+
+        ANSIBLE="/tmp/fiap/ansible_venv/bin/ansible"
+
+    else
+
+        echo "❌ Comando ansible não encontrado."
+
+        exit 1
+
+    fi
+
 fi
 
-if [ -z "$ANSIBLE_BIN" ]; then
-    echo ""
-    echo "❌ Comando ansible não encontrado!"
+
+# ============================================================
+# Configurações Ansible
+# ============================================================
+
+export ANSIBLE_PYTHON_INTERPRETER=auto_silent
+export ANSIBLE_DEPRECATION_WARNINGS=false
+export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
+
+
+# ============================================================
+# Terraform
+# ============================================================
+
+if [ ! -d "$TF_DIR" ]; then
+
+    echo "❌ Diretório Terraform não encontrado:"
+    echo "   $TF_DIR"
+
     exit 1
+
 fi
 
+cd "$TF_DIR"
+
+
 # ============================================================
-# LOCALIZAR INSTÂNCIAS
+# Obter instâncias
 # ============================================================
 
-GET_INSTANCES="$HOME/.fiaplab/get_instances.sh"
+mapfile -t INSTANCES < <(
+    terraform show -json 2>/dev/null |
+    jq -r '
+        .values.root_module.resources[]?
+        | select(.type=="aws_instance" and .name=="web")
+        | .values.id
+    '
+)
 
-if [ ! -x "$GET_INSTANCES" ]; then
-    echo ""
-    echo "❌ get_instances.sh não encontrado:"
-    echo "$GET_INSTANCES"
+if [ "${#INSTANCES[@]}" -eq 0 ]; then
+
+    echo "❌ Nenhuma instância encontrada no Terraform."
+
     exit 1
+
 fi
 
-mapfile -t INSTANCE_IDS < <("$GET_INSTANCES")
 
-if [ "${#INSTANCE_IDS[@]}" -eq 0 ]; then
-    echo ""
-    echo "❌ Nenhuma instância EC2 encontrada no Terraform."
-    echo ""
-    echo "Execute primeiro:"
-    echo "  ~/criar.sh"
-    exit 1
-fi
-
-INSTANCE_ID="${INSTANCE_IDS[0]}"
-
-# ============================================================
-# CONSULTAR ESTADO DA VM
-# ============================================================
-
-echo "Consultando instância:"
-echo "$INSTANCE_ID"
+echo "Instâncias encontradas:"
 echo ""
 
-STATE="$(
-    aws ec2 describe-instances \
+
+for INDEX in "${!INSTANCES[@]}"; do
+
+    INSTANCE_ID="${INSTANCES[$INDEX]}"
+
+    STATE=$(aws ec2 describe-instances \
         --instance-ids "$INSTANCE_ID" \
         --region "$AWS_REGION" \
         --query 'Reservations[0].Instances[0].State.Name' \
-        --output text 2>/dev/null
-)"
+        --output text)
 
-if [ "$STATE" != "running" ]; then
-    echo ""
-    echo "❌ A VM não está ligada."
-    echo ""
-    echo "Estado: $STATE"
-    echo "Instância: $INSTANCE_ID"
-    echo ""
-    echo "Execute:"
-    echo "  ~/ligar.sh"
-    exit 1
-fi
-
-# ============================================================
-# DESCOBRIR IP
-# ============================================================
-
-PUBLIC_IP="$(
-    aws ec2 describe-instances \
+    PUBLIC_IP=$(aws ec2 describe-instances \
         --instance-ids "$INSTANCE_ID" \
         --region "$AWS_REGION" \
         --query 'Reservations[0].Instances[0].PublicIpAddress' \
-        --output text 2>/dev/null
-)"
+        --output text)
 
-if [ -z "$PUBLIC_IP" ] || [ "$PUBLIC_IP" = "None" ]; then
-    echo ""
-    echo "❌ A VM está ligada, mas não possui IP público."
-    exit 1
-fi
+    echo "$((INDEX + 1)). $INSTANCE_ID | $STATE | $PUBLIC_IP"
+
+done
+
 
 echo ""
-echo "IP público:"
-echo "$PUBLIC_IP"
-echo ""
+
 
 # ============================================================
-# VALIDAR CHAVE SSH
+# Primeira instância
+# ============================================================
+
+FIRST_INSTANCE="${INSTANCES[0]}"
+
+
+STATE=$(aws ec2 describe-instances \
+    --instance-ids "$FIRST_INSTANCE" \
+    --region "$AWS_REGION" \
+    --query 'Reservations[0].Instances[0].State.Name' \
+    --output text)
+
+
+if [ "$STATE" != "running" ]; then
+
+    echo "❌ A primeira instância não está ligada."
+    echo "Estado: $STATE"
+    echo ""
+    echo "Execute:"
+    echo "  ~/ligar.sh"
+
+    exit 1
+
+fi
+
+
+PUBLIC_IP=$(aws ec2 describe-instances \
+    --instance-ids "$FIRST_INSTANCE" \
+    --region "$AWS_REGION" \
+    --query 'Reservations[0].Instances[0].PublicIpAddress' \
+    --output text)
+
+
+if [ "$PUBLIC_IP" = "None" ] || [ -z "$PUBLIC_IP" ]; then
+
+    echo "❌ A primeira instância não possui IP público."
+
+    exit 1
+
+fi
+
+
+# ============================================================
+# Chave SSH
 # ============================================================
 
 if [ ! -f "$SSH_KEY" ]; then
-    echo ""
+
     echo "❌ Chave SSH não encontrada:"
     echo "$SSH_KEY"
+
     exit 1
+
 fi
+
 
 chmod 400 "$SSH_KEY"
 
+
 # ============================================================
-# CRIAR INVENTÁRIO TEMPORÁRIO
+# Inventário temporário
 # ============================================================
 
 INVENTORY="$(mktemp)"
 
 trap 'rm -f "$INVENTORY"' EXIT
 
-cat > "$INVENTORY" <<INVENTORY_EOF
-[ubuntu]
-vm1 ansible_host=$PUBLIC_IP ansible_user=$SSH_USER
 
-[ubuntu:vars]
-ansible_ssh_private_key_file=$SSH_KEY
-ansible_python_interpreter=/usr/bin/python3
+cat > "$INVENTORY" <<INVENTORY_EOF
+[nodes]
+ubuntu ansible_host=$PUBLIC_IP ansible_user=ubuntu ansible_ssh_private_key_file=$SSH_KEY ansible_python_interpreter=auto_silent
 INVENTORY_EOF
 
-echo "============================================================"
-echo " INVENTÁRIO"
-echo "============================================================"
-echo ""
 
+echo ""
+echo "Inventário:"
+echo "------------------------------------------"
 cat "$INVENTORY"
-
+echo "------------------------------------------"
 echo ""
+
 
 # ============================================================
-# TESTAR ANSIBLE
+# Testar conexão
 # ============================================================
 
-echo "============================================================"
-echo " TESTANDO ANSIBLE"
-echo "============================================================"
+echo "Testando conexão com a VM..."
 echo ""
 
-echo "Ansible:"
-"$ANSIBLE_PLAYBOOK" --version | head -n 1
+
+"$ANSIBLE" \
+    -i "$INVENTORY" \
+    nodes \
+    -m ping
+
 
 echo ""
-echo "Executando:"
-echo "$ANSIBLE_BIN -i $INVENTORY ubuntu -m ping"
+echo "✓ Conexão Ansible OK."
 echo ""
 
-if ! "$ANSIBLE_BIN" -i "$INVENTORY" ubuntu -m ping; then
-
-    echo ""
-    echo "❌ Falha na conexão com a VM."
-    echo ""
-    echo "Verifique:"
-    echo "  - VM está ligada"
-    echo "  - IP público"
-    echo "  - labsuser.pem"
-    echo "  - Security Group"
-    echo "  - acesso SSH"
-    echo ""
-
-    exit 1
-fi
-
-echo ""
-echo "✅ Conexão Ansible funcionando!"
-echo ""
 
 # ============================================================
-# LOCALIZAR PLAYBOOKS
+# Procurar playbooks
 # ============================================================
 
 mapfile -t PLAYBOOKS < <(
-    find "$TF_DIR" -maxdepth 2 -type f \
+    find "$TF_DIR" \
+        -type f \
         \( -name "*.yml" -o -name "*.yaml" \) \
-        ! -name "inventory*" \
+        ! -path "*/.terraform/*" \
         | sort
 )
 
+
 if [ "${#PLAYBOOKS[@]}" -eq 0 ]; then
 
-    echo ""
-    echo "⚠️ Nenhum playbook YAML encontrado em:"
+    echo "❌ Nenhum playbook .yml/.yaml encontrado em:"
     echo "$TF_DIR"
-    echo ""
 
-    exit 0
+    exit 1
+
 fi
 
-# ============================================================
-# MOSTRAR PLAYBOOKS
-# ============================================================
 
-echo "============================================================"
-echo " PLAYBOOKS ENCONTRADOS"
-echo "============================================================"
+echo "Playbooks encontrados:"
 echo ""
 
-for i in "${!PLAYBOOKS[@]}"; do
-    echo "[$((i + 1))] ${PLAYBOOKS[$i]}"
+
+for INDEX in "${!PLAYBOOKS[@]}"; do
+
+    echo "$((INDEX + 1)). ${PLAYBOOKS[$INDEX]}"
+
 done
 
+
 echo ""
 
+
 # ============================================================
-# ESCOLHER PLAYBOOK
+# Selecionar playbook
 # ============================================================
 
 if [ "${#PLAYBOOKS[@]}" -eq 1 ]; then
 
-    SELECTED_PLAYBOOK="${PLAYBOOKS[0]}"
-
-    echo "Playbook selecionado:"
-    echo "$SELECTED_PLAYBOOK"
-    echo ""
+    PLAYBOOK="${PLAYBOOKS[0]}"
 
 else
 
-    read -r -p "Escolha o playbook [1-${#PLAYBOOKS[@]}]: " OPTION
+    read -r -p "Escolha o número do playbook: " OPCAO
 
-    if ! [[ "$OPTION" =~ ^[0-9]+$ ]] ||
-       [ "$OPTION" -lt 1 ] ||
-       [ "$OPTION" -gt "${#PLAYBOOKS[@]}" ]; then
+    if ! [[ "$OPCAO" =~ ^[0-9]+$ ]]; then
 
-        echo ""
         echo "❌ Opção inválida."
+
         exit 1
+
     fi
 
-    SELECTED_PLAYBOOK="${PLAYBOOKS[$((OPTION - 1))]}"
+    if [ "$OPCAO" -lt 1 ] || [ "$OPCAO" -gt "${#PLAYBOOKS[@]}" ]; then
+
+        echo "❌ Opção inválida."
+
+        exit 1
+
+    fi
+
+    PLAYBOOK="${PLAYBOOKS[$((OPCAO - 1))]}"
 
 fi
 
-# ============================================================
-# CONFIRMAR EXECUÇÃO
-# ============================================================
 
 echo ""
-echo "============================================================"
-echo " PLAYBOOK SELECIONADO"
-echo "============================================================"
-echo ""
-echo "Playbook:"
-echo "$SELECTED_PLAYBOOK"
-echo ""
-echo "VM:"
-echo "$INSTANCE_ID"
-echo ""
-echo "IP:"
-echo "$PUBLIC_IP"
+echo "Playbook selecionado:"
+echo "$PLAYBOOK"
 echo ""
 
-read -r -p "Deseja executar este playbook? [s/N]: " CONFIRM
 
-case "$CONFIRM" in
-    s|S|sim|SIM|Sim)
-        ;;
-    *)
-        echo ""
-        echo "Operação cancelada."
-        exit 0
-        ;;
-esac
+read -r -p "Deseja executar este playbook? [s/N]: " CONFIRMA
 
-# ============================================================
-# EXECUTAR PLAYBOOK
-# ============================================================
+
+if [[ ! "$CONFIRMA" =~ ^[sS]$ ]]; then
+
+    echo ""
+    echo "Operação cancelada."
+
+    exit 0
+
+fi
+
 
 echo ""
-echo "============================================================"
-echo " EXECUTANDO ANSIBLE"
-echo "============================================================"
+echo "Executando Ansible..."
 echo ""
+
 
 "$ANSIBLE_PLAYBOOK" \
     -i "$INVENTORY" \
-    "$SELECTED_PLAYBOOK"
+    "$PLAYBOOK"
 
-RESULT=$?
 
 echo ""
-
-if [ "$RESULT" -eq 0 ]; then
-
-    echo "============================================================"
-    echo " ✅ ANSIBLE EXECUTADO COM SUCESSO"
-    echo "============================================================"
-
-else
-
-    echo "============================================================"
-    echo " ❌ ANSIBLE FINALIZOU COM ERRO"
-    echo "============================================================"
-
-    exit "$RESULT"
-
-fi
+echo "=========================================="
+echo " ANSIBLE FINALIZADO"
+echo "=========================================="
+echo ""
 EOF
 
 chmod +x "$HOME/ansible.sh"
 
+
 # ============================================================
-# FINALIZAÇÃO
+# RESUMO
 # ============================================================
 
 echo ""
-echo "============================================================"
-echo " ✅ CONFIGURAÇÃO CONCLUÍDA"
-echo "============================================================"
+echo "=========================================="
+echo " SCRIPTS CRIADOS"
+echo "=========================================="
 echo ""
 
-echo "Scripts criados:"
-echo ""
-echo "  ~/criar.sh"
-echo "  ~/destruir.sh"
-echo "  ~/ligar.sh"
-echo "  ~/suspender.sh"
-echo "  ~/status.sh"
-echo "  ~/ip"
-echo "  ~/conectar.sh"
-echo "  ~/ansible.sh"
-echo ""
-
-echo "Configurações auxiliares:"
-echo ""
-echo "  ~/.fiaplab/config.sh"
-echo "  ~/.fiaplab/get_instances.sh"
-echo ""
-
-echo "============================================================"
-echo " COMANDOS PRINCIPAIS"
-echo "============================================================"
-echo ""
-echo "Criar VM:"
+echo "Criar infraestrutura:"
 echo "  ~/criar.sh"
 echo ""
-echo "Ver status:"
-echo "  ~/status.sh"
-echo ""
-echo "Ver somente IP:"
-echo "  ~/ip"
-echo ""
-echo "Conectar na primeira VM:"
-echo "  ~/conectar.sh"
-echo ""
-echo "Conectar na VM 2:"
-echo "  ~/conectar.sh 2"
-echo ""
-echo "Ligar VM(s):"
-echo "  ~/ligar.sh"
-echo ""
-echo "Suspender VM(s):"
-echo "  ~/suspender.sh"
-echo ""
-echo "Executar Ansible:"
-echo "  ~/ansible.sh"
-echo ""
+
 echo "Destruir infraestrutura:"
 echo "  ~/destruir.sh"
 echo ""
-echo "============================================================"
+
+echo "Ligar VM:"
+echo "  ~/ligar.sh"
+echo ""
+
+echo "Suspender VM:"
+echo "  ~/suspender.sh"
+echo ""
+
+echo "Ver status:"
+echo "  ~/status.sh"
+echo ""
+
+echo "Ver IP da primeira VM:"
+echo "  ~/ip"
+echo ""
+
+echo "Conectar na primeira VM:"
+echo "  ~/conectar.sh"
+echo ""
+
+echo "Conectar na VM 2:"
+echo "  ~/conectar.sh 2"
+echo ""
+
+echo "Executar Ansible:"
+echo "  ~/ansible.sh"
+echo ""
+
+echo "=========================================="
