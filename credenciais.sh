@@ -1,34 +1,43 @@
 #!/bin/bash
 
-echo "\n\n Ajustando as Credenciais do CloudShell e a permissão do arquivo labsuser.pem"
+# ------------------------------------------------------------
+# GERAR ~/.aws/credentials A PARTIR DO CLOUDSHELL
+# ------------------------------------------------------------
+echo "============================================================"
+echo "    GERANDO ARQUIVO DE CREDENCIAIS DA AWS"
+echo "============================================================"
+echo ""
 
-## Retrieve AWS credentials from AWS CloudShell : aws-cloud-shell-get-aws-credentials.sh
-# https://gist.github.com/dclark/b014ac10540ca2d6911c643b8956fc50
+if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] && [ -n "$AWS_CONTAINER_AUTHORIZATION_TOKEN" ]; then
+    CREDS=$(curl -s -H "Authorization: $AWS_CONTAINER_AUTHORIZATION_TOKEN" "$AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    
+    KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId // empty')
+    SECRET_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey // empty')
+    SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Token // empty')
 
-# O CloudShell expõe as credenciais ativas via endpoint do container
-CREDS=$(curl -s "$AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    if [ -n "$KEY_ID" ]; then
+        mkdir -p ~/.aws
 
-KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId')
-SECRET_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey')
-TOKEN=$(echo "$CREDS" | jq -r '.Token')
-
-# Cria o arquivo de credenciais formatado corretamente para a AWS CLI
-mkdir -p ~/.aws
-
-cat > ~/.aws/credentials <<EOF
+        cat > ~/.aws/credentials <<EOF
 [default]
 aws_access_key_id = ${KEY_ID}
 aws_secret_access_key = ${SECRET_KEY}
-aws_session_token = ${TOKEN}
+aws_session_token = ${SESSION_TOKEN}
 EOF
 
-cat > ~/.aws/config <<EOF
+        cat > ~/.aws/config <<EOF
 [default]
 region = us-east-1
 output = json
 EOF
 
-echo "✅ Arquivo ~/.aws/credentials gerado com sucesso!"
+        echo "✅ Arquivo ~/.aws/credentials gerado com sucesso!"
+    else
+        echo "⚠️ Não foi possível extrair os campos do JSON de credenciais."
+    fi
+else
+    echo "⚠️ Variáveis de ambiente do CloudShell não encontradas."
+fi
 
-docker run --rm -ti --name webconfig --entrypoint /bin/sh -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
-docker exec -ti webconfig /bin/bash
+#docker run --rm -ti --name webconfig --entrypoint /bin/sh -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
+#docker exec -ti webconfig /bin/bash
