@@ -1,32 +1,34 @@
 #!/bin/bash
 
-echo "\n\n Ajustando as pastas do CloudShell e a permissão do arquivo labsuser.pem"
+echo "\n\n Ajustando as Credenciais do CloudShell e a permissão do arquivo labsuser.pem"
 
 ## Retrieve AWS credentials from AWS CloudShell : aws-cloud-shell-get-aws-credentials.sh
 # https://gist.github.com/dclark/b014ac10540ca2d6911c643b8956fc50
 
-if [ $(ls ~ | grep labsuser.pem | wc -l) = "1" ]
-then
-  printf "\t\tARQUIVO labsuser.pem OK!\n\n"
-  mkdir ~/environment/ && mkdir ~/environment/.aws/
-  cp  ~/labsuser.pem ~/environment/labsuser.pem
-  chmod 400 ~/environment/labsuser.pem
-else
-  echo "\t\tArquivo labsuser.pem não encontrado, você deve fazer o upload do arquivo para o CloudShell\n\n"
-  exit
-fi
+# O CloudShell expõe as credenciais ativas via endpoint do container
+CREDS=$(curl -s "$AWS_CONTAINER_CREDENTIALS_FULL_URI")
 
-# shellcheck disable=SC2001
-HOST=$(echo "$AWS_CONTAINER_CREDENTIALS_FULL_URI" | sed 's|/latest.*||')
-TOKEN=$(curl -s -X PUT "$HOST"/latest/api/token -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
-OUTPUT=$(curl -s "$HOST/latest/meta-data/container/security-credentials" -H "X-aws-ec2-metadata-token: $TOKEN")
-echo "[default]" > credentials
-echo "AWS_ACCESS_KEY_ID=$(echo "$OUTPUT" | jq -r '.AccessKeyId')" >> credentials
-echo "AWS_SECRET_ACCESS_KEY=$(echo "$OUTPUT" | jq -r '.SecretAccessKey')" >> credentials
-echo "AWS_SESSION_TOKEN=$(echo "$OUTPUT" | jq -r '.Token')" >> credentials
-echo "region=us-east-1" >> credentials
+KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId')
+SECRET_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey')
+TOKEN=$(echo "$CREDS" | jq -r '.Token')
 
-cp credentials ~/environment/.aws/credentials
+# Cria o arquivo de credenciais formatado corretamente para a AWS CLI
+mkdir -p ~/.aws
+
+cat > ~/.aws/credentials <<EOF
+[default]
+aws_access_key_id = ${KEY_ID}
+aws_secret_access_key = ${SECRET_KEY}
+aws_session_token = ${TOKEN}
+EOF
+
+cat > ~/.aws/config <<EOF
+[default]
+region = us-east-1
+output = json
+EOF
+
+echo "✅ Arquivo ~/.aws/credentials gerado com sucesso!"
 
 docker run --rm -ti --name webconfig --entrypoint /bin/sh -v ~/environment/:/home/ubuntu/environment/ -d tonanuvem/config:ubuntu /bin/bash 
 docker exec -ti webconfig /bin/bash
