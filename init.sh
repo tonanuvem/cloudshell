@@ -121,9 +121,6 @@ plugin_cache_dir = "$TMP_APP_DIR/tf_cache"
 disable_checkpoint = true
 EOF
 
-# ------------------------------------------------------------
-# 2. VERIFICAÇÃO E CRIAÇÃO DO BACKEND S3 + DYNAMODB
-# ------------------------------------------------------------
 echo "============================================================"
 echo "    VERIFICANDO RECURSOS DE BACKEND (S3 + DYNAMODB)"
 echo "============================================================"
@@ -139,9 +136,13 @@ echo "🔒 DynamoDB:   $DYNAMO_TABLE"
 echo ""
 
 # --- A. VERIFICA / CRIA BUCKET S3 ---
-if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
-    echo "✅ Bucket S3 '$BUCKET_NAME' já existe."
-else
+S3_CHECK=$(aws s3api head-bucket --bucket "$BUCKET_NAME" 2>&1 || true)
+
+if echo "$S3_CHECK" | grep -q -i "AccessDenied"; then
+    echo "❌ Erro de permissão ao acessar o S3. Suas credenciais foram bloqueadas ou expiraram."
+    echo "   Verifique a política 'voc-cancel-cred' no painel do Vocareum/AWS Academy."
+    exit 1
+elif echo "$S3_CHECK" | grep -q -iE "404|Not Found"; then
     echo "⬇️ Bucket S3 não encontrado. Criando '$BUCKET_NAME'..."
     
     if [ "$AWS_REGION" = "us-east-1" ]; then
@@ -162,12 +163,17 @@ else
         --public-access-block-configuration "BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true"
 
     echo "✅ Bucket S3 criado e configurado com sucesso!"
+else
+    echo "✅ Bucket S3 '$BUCKET_NAME' já existe."
 fi
 
 # --- B. VERIFICA / CRIA TABELA DYNAMODB ---
-if aws dynamodb describe-table --table-name "$DYNAMO_TABLE" --region "$AWS_REGION" >/dev/null 2>&1; then
-    echo "✅ Tabela DynamoDB '$DYNAMO_TABLE' já existe."
-else
+DYNAMO_CHECK=$(aws dynamodb describe-table --table-name "$DYNAMO_TABLE" --region "$AWS_REGION" 2>&1 || true)
+
+if echo "$DYNAMO_CHECK" | grep -q -i "AccessDenied"; then
+    echo "❌ Erro de permissão ao acessar o DynamoDB. Suas credenciais foram bloqueadas ou expiraram."
+    exit 1
+elif echo "$DYNAMO_CHECK" | grep -q -iE "ResourceNotFoundException|404|Not Found"; then
     echo "⬇️ Tabela DynamoDB não encontrada. Criando '$DYNAMO_TABLE'..."
     
     aws dynamodb create-table \
@@ -181,6 +187,8 @@ else
     aws dynamodb wait table-exists --table-name "$DYNAMO_TABLE" --region "$AWS_REGION"
     
     echo "✅ Tabela DynamoDB criada com sucesso!"
+else
+    echo "✅ Tabela DynamoDB '$DYNAMO_TABLE' já existe."
 fi
 
 echo ""
