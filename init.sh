@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # O init pode parar se houver erro.
-set -e
+# set -e
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
@@ -126,7 +126,8 @@ echo ""
 echo "AWS Account : $ACCOUNT_ID"
 echo "AWS Region  : $AWS_REGION"
 echo "S3 Bucket   : $BUCKET_NAME"
-echo "DynamoDB    : $DYNAMO_TABLE"
+# Histórico:
+# echo "DynamoDB    : $DYNAMO_TABLE"
 echo ""
 
 # ============================================================
@@ -163,37 +164,52 @@ else
 fi
 
 # ============================================================
-# 7. DYNAMODB LOCK
+# 7. DYNAMODB LOCK - DESCONTINUADO
 # ============================================================
 
-echo ">> Verificando tabela DynamoDB..."
-
-if aws dynamodb describe-table \
-    --table-name "$DYNAMO_TABLE" \
-    --region "$AWS_REGION" \
-    >/dev/null 2>&1; then
-
-    echo "   Tabela já existe."
-
-else
-
-    echo "   Criando tabela..."
-
-    aws dynamodb create-table \
-        --table-name "$DYNAMO_TABLE" \
-        --attribute-definitions \
-            AttributeName=LockID,AttributeType=S \
-        --key-schema \
-            AttributeName=LockID,KeyType=HASH \
-        --billing-mode PAY_PER_REQUEST \
-        --region "$AWS_REGION"
-
-    echo "   Aguardando tabela ficar disponível..."
-
-    aws dynamodb wait table-exists \
-        --table-name "$DYNAMO_TABLE" \
-        --region "$AWS_REGION"
-fi
+# Histórico:
+# O Terraform utilizava anteriormente o DynamoDB para realizar
+# o locking do state.
+#
+# A configuração foi substituída por:
+#
+#     use_lockfile = true
+#
+# no backend S3.
+#
+# Portanto, esta seção foi mantida apenas como histórico e
+# não deve mais criar, verificar ou utilizar a tabela DynamoDB.
+#
+# DYNAMO_TABLE="terraform-locks"
+#
+# echo ">> Verificando tabela DynamoDB..."
+#
+# if aws dynamodb describe-table \
+#     --table-name "$DYNAMO_TABLE" \
+#     --region "$AWS_REGION" \
+#     >/dev/null 2>&1; then
+#
+#     echo "   Tabela já existe."
+#
+# else
+#
+#     echo "   Criando tabela..."
+#
+#     aws dynamodb create-table \
+#         --table-name "$DYNAMO_TABLE" \
+#         --attribute-definitions \
+#             AttributeName=LockID,AttributeType=S \
+#         --key-schema \
+#             AttributeName=LockID,KeyType=HASH \
+#         --billing-mode PAY_PER_REQUEST \
+#         --region "$AWS_REGION"
+#
+#     echo "   Aguardando tabela ficar disponível..."
+#
+#     aws dynamodb wait table-exists \
+#         --table-name "$DYNAMO_TABLE" \
+#         --region "$AWS_REGION"
+# fi
 
 # ============================================================
 # 8. MAP TERRAFORM PROJECTS
