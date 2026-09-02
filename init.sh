@@ -26,9 +26,38 @@ else
     (cd "$PASTA_CONFIG" && git pull --ff-only || true)
 fi
 
-# ------------------------------------------------------------
-# GERAR CREDENCIAIS DA AWS
-# ------------------------------------------------------------
+echo ""
+echo "============================================================"
+echo "        CONFIGURANDO CHAVE SSH labsuser.pem"
+echo "============================================================"
+echo ""
+
+# 1. Se o arquivo já está na PASTA_ENV e tem conteúdo, garante só a permissão 400
+if [ -s "$PASTA_ENV/labsuser.pem" ]; then
+    chmod 400 "$PASTA_ENV/labsuser.pem"
+    printf "\t\t✅ Arquivo $PASTA_ENV/labsuser.pem já existe e está pronto!\n\n"
+
+# 2. Se não está no destino, mas existe na $HOME, faz a cópia
+elif [ -f "$HOME/labsuser.pem" ]; then
+    printf "\t\t✅ ARQUIVO labsuser.pem encontrado na home. Copiando...\n\n"
+
+    cp -f "$HOME/labsuser.pem" "$PASTA_ENV/labsuser.pem"
+    chmod 400 "$PASTA_ENV/labsuser.pem"
+
+    printf "\t\tPermissão configurada: 400\n"
+    printf "\t\tArquivo: $PASTA_ENV/labsuser.pem\n\n"
+
+else
+    echo ""
+    echo "❌ Arquivo labsuser.pem não encontrado na \$HOME nem em $PASTA_ENV!"
+    echo ""
+    echo "Você deve fazer o upload do arquivo"
+    echo "labsuser.pem para o AWS CloudShell."
+    echo ""
+
+    exit 1
+fi
+
 echo "============================================================"
 echo "    GERANDO ARQUIVO DE CREDENCIAIS DA AWS"
 echo "============================================================"
