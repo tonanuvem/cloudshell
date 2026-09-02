@@ -1,4 +1,3 @@
-```bash
 #!/bin/bash
 
 # ============================================================
@@ -1537,18 +1536,7 @@ echo "============================================================"
 echo " Scripts criados com sucesso"
 echo "============================================================"
 echo
-echo "  ~/fiaplab.sh"
-echo "  ~/criar.sh"
-echo "  ~/destruir.sh"
-echo "  ~/ligar.sh"
-echo "  ~/suspender.sh"
-echo "  ~/status.sh"
-echo "  ~/ip"
-echo "  ~/conectar.sh"
-echo "  ~/ansible.sh"
-echo
 echo "Para iniciar o laboratório:"
 echo
 echo "  ~/fiaplab.sh"
 echo
-```
