@@ -320,7 +320,7 @@ echo "--- Armazenamento Temporário (/tmp - 10GB) ---"
 df -h /tmp
 
 echo "============================================================"
-echo "    VERIFICANDO DISCO DO CLOUDSHELL"
+echo "    CONFIGURAÇÕES DOS COMANDOS"
 echo "============================================================"
 echo ""
 
