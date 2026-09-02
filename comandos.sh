@@ -15,7 +15,27 @@
 #   ip
 #   destruir.sh
 #
-# NÃO copia comandos.sh para ~/.fiaplab
+# Arquitetura:
+#
+#   S3
+#      -> projetos que possuem Terraform State
+#
+#   $HOME/environment/config
+#      -> projetos Terraform disponíveis localmente
+#
+# Tela inicial:
+#      -> SOMENTE projetos existentes no S3
+#
+# Opção 1 - Criar infraestrutura:
+#      -> mostra projetos locais
+#      -> permite criar projeto novo
+#
+# Opção 8 - Trocar projeto:
+#      -> SOMENTE projetos existentes no S3
+#
+# Não utiliza:
+#      set -e
+#      source comandos.sh
 # ============================================================
 
 HOME_DIR="$HOME"
@@ -67,6 +87,11 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
     --query Account \
     --output text)
 
+if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+    echo "❌ Não foi possível identificar a conta AWS."
+    exit 1
+fi
+
 BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
 DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
@@ -80,8 +105,10 @@ echo "Diretório: $TF_DIR"
 echo "State   : s3://$BUCKET_NAME/$TFSTATE_KEY"
 echo ""
 
-# Cria backend.tf apenas se o projeto ainda não possuir
-# configuração de backend S3.
+# ------------------------------------------------------------
+# Backend
+# ------------------------------------------------------------
+
 if ! grep -Rqs 'backend[[:space:]]*"s3"' "$TF_DIR"/*.tf 2>/dev/null; then
 
     echo ">> Configurando backend S3..."
@@ -94,6 +121,10 @@ EOF2
 
 fi
 
+# ------------------------------------------------------------
+# Terraform init
+# ------------------------------------------------------------
+
 echo ">> Terraform init..."
 
 terraform -chdir="$TF_DIR" init -reconfigure \
@@ -102,8 +133,21 @@ terraform -chdir="$TF_DIR" init -reconfigure \
     -backend-config="region=$AWS_REGION" \
     -backend-config="dynamodb_table=$DYNAMO_TABLE"
 
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform init terminou com erro."
+    exit "$RC"
+fi
+
+# ------------------------------------------------------------
+# Terraform apply
+# ------------------------------------------------------------
+
 echo ""
 echo ">> Terraform apply..."
+echo ""
 
 terraform -chdir="$TF_DIR" apply
 
@@ -121,6 +165,7 @@ exit "$RC"
 EOF
 
 chmod +x "$HOME_DIR/criar.sh"
+
 
 # ============================================================
 # destruir.sh
@@ -158,6 +203,11 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
     --query Account \
     --output text)
 
+if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+    echo "❌ Não foi possível identificar a conta AWS."
+    exit 1
+fi
+
 BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
 DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
@@ -188,8 +238,17 @@ terraform -chdir="$TF_DIR" init -reconfigure \
     -backend-config="region=$AWS_REGION" \
     -backend-config="dynamodb_table=$DYNAMO_TABLE"
 
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform init terminou com erro."
+    exit "$RC"
+fi
+
 echo ""
 echo ">> Terraform destroy..."
+echo ""
 
 terraform -chdir="$TF_DIR" destroy
 
@@ -207,6 +266,7 @@ exit "$RC"
 EOF
 
 chmod +x "$HOME_DIR/destruir.sh"
+
 
 # ============================================================
 # status.sh
@@ -228,8 +288,6 @@ if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado: $PROJECT"
     exit 1
 fi
-
-AWS_REGION="${AWS_REGION:-us-east-1}"
 
 if [ -f "$HOME/environment/credenciais/credentials" ]; then
     export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
@@ -258,7 +316,7 @@ INSTANCE_COUNT=$(echo "$STATE_JSON" |
     jq '[.. | objects | select(.type? == "aws_instance") | .instances[]?] | length' \
     2>/dev/null)
 
-if [ -z "$INSTANCE_COUNT" ]; then
+if [ -z "$INSTANCE_COUNT" ] || [ "$INSTANCE_COUNT" = "null" ]; then
     INSTANCE_COUNT=0
 fi
 
@@ -281,10 +339,12 @@ if [ "$INSTANCE_COUNT" -gt 0 ]; then
             @tsv
         ' 2>/dev/null |
     while IFS=$'\t' read -r ID IP STATE; do
+
         echo "ID     : $ID"
         echo "IP     : $IP"
         echo "Estado : $STATE"
         echo ""
+
     done
 fi
 
@@ -292,6 +352,7 @@ exit 0
 EOF
 
 chmod +x "$HOME_DIR/status.sh"
+
 
 # ============================================================
 # ip
@@ -314,7 +375,19 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
+echo ""
+echo "Atualizando state..."
+echo ""
+
 terraform -chdir="$TF_DIR" refresh
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform refresh terminou com erro."
+    exit "$RC"
+fi
 
 echo ""
 echo "IPs externos:"
@@ -322,20 +395,17 @@ echo ""
 
 terraform -chdir="$TF_DIR" output -json 2>/dev/null |
     jq -r '
-        if .ip_externo.value? then
-            .ip_externo.value |
-            if type == "string" then
-                .
-            else
-                .. | strings
-            end
+        .ip_externo.value? |
+        if type == "string" then
+            .
         else
-            empty
+            .. | strings
         end
     ' 2>/dev/null
 EOF
 
 chmod +x "$HOME_DIR/ip"
+
 
 # ============================================================
 # ligar.sh
@@ -376,7 +446,22 @@ echo ""
 
 terraform -chdir="$TF_DIR" refresh
 
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform refresh terminou com erro."
+    exit "$RC"
+fi
+
 STATE_JSON=$(terraform -chdir="$TF_DIR" show -json)
+
+RC=$?
+
+if [ "$RC" -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "❌ Não foi possível obter o Terraform state."
+    exit 1
+fi
 
 IDS=($(echo "$STATE_JSON" |
     jq -r '
@@ -407,12 +492,20 @@ if [ -z "$NUMERO" ]; then
 
     echo ""
     echo ">> Ligando todas as VMs..."
+    echo ""
 
     aws ec2 start-instances \
         --instance-ids "${IDS[@]}" \
         --region "$AWS_REGION"
 
+    RC=$?
+
 else
+
+    if ! [[ "$NUMERO" =~ ^[0-9]+$ ]]; then
+        echo "❌ Número inválido."
+        exit 1
+    fi
 
     INDEX=$((NUMERO - 1))
 
@@ -423,17 +516,28 @@ else
 
     echo ""
     echo ">> Ligando ${IDS[$INDEX]}..."
+    echo ""
 
     aws ec2 start-instances \
         --instance-ids "${IDS[$INDEX]}" \
         --region "$AWS_REGION"
+
+    RC=$?
 fi
 
 echo ""
-echo "✅ Comando enviado."
+
+if [ "$RC" -eq 0 ]; then
+    echo "✅ Comando enviado."
+else
+    echo "❌ Erro ao ligar instância(s)."
+fi
+
+exit "$RC"
 EOF
 
 chmod +x "$HOME_DIR/ligar.sh"
+
 
 # ============================================================
 # suspender.sh
@@ -474,7 +578,22 @@ echo ""
 
 terraform -chdir="$TF_DIR" refresh
 
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform refresh terminou com erro."
+    exit "$RC"
+fi
+
 STATE_JSON=$(terraform -chdir="$TF_DIR" show -json)
+
+RC=$?
+
+if [ "$RC" -ne 0 ] || [ -z "$STATE_JSON" ]; then
+    echo "❌ Não foi possível obter o Terraform state."
+    exit 1
+fi
 
 IDS=($(echo "$STATE_JSON" |
     jq -r '
@@ -505,12 +624,20 @@ if [ -z "$NUMERO" ]; then
 
     echo ""
     echo ">> Suspendendo todas as VMs..."
+    echo ""
 
     aws ec2 stop-instances \
         --instance-ids "${IDS[@]}" \
         --region "$AWS_REGION"
 
+    RC=$?
+
 else
+
+    if ! [[ "$NUMERO" =~ ^[0-9]+$ ]]; then
+        echo "❌ Número inválido."
+        exit 1
+    fi
 
     INDEX=$((NUMERO - 1))
 
@@ -521,17 +648,28 @@ else
 
     echo ""
     echo ">> Suspendendo ${IDS[$INDEX]}..."
+    echo ""
 
     aws ec2 stop-instances \
         --instance-ids "${IDS[$INDEX]}" \
         --region "$AWS_REGION"
+
+    RC=$?
 fi
 
 echo ""
-echo "✅ Comando enviado."
+
+if [ "$RC" -eq 0 ]; then
+    echo "✅ Comando enviado."
+else
+    echo "❌ Erro ao suspender instância(s)."
+fi
+
+exit "$RC"
 EOF
 
 chmod +x "$HOME_DIR/suspender.sh"
+
 
 # ============================================================
 # conectar.sh
@@ -549,6 +687,11 @@ if [ -z "$PROJECT" ]; then
     echo ""
     echo "Exemplo:"
     echo "  ~/conectar.sh cluster 3"
+    exit 1
+fi
+
+if ! [[ "$NODENUM" =~ ^[0-9]+$ ]] || [ "$NODENUM" -lt 1 ]; then
+    echo "❌ Número da VM inválido."
     exit 1
 fi
 
@@ -579,8 +722,17 @@ echo ""
 echo "Conectando ao projeto: $PROJECT"
 echo ""
 echo "Atualizando IP..."
+echo ""
 
 terraform -chdir="$TF_DIR" refresh
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform refresh terminou com erro."
+    exit "$RC"
+fi
 
 IPS=(
     $(
@@ -605,8 +757,10 @@ if [ -z "$IP" ] || [ "$IP" = "null" ]; then
     echo "❌ Não foi possível obter o IP da VM $NODENUM."
     echo ""
 
-    echo "IPs encontrados:"
-    printf '%s\n' "${IPS[@]}"
+    if [ "${#IPS[@]}" -gt 0 ]; then
+        echo "IPs encontrados:"
+        printf '%s\n' "${IPS[@]}"
+    fi
 
     exit 1
 fi
@@ -622,6 +776,13 @@ ssh \
     ubuntu@"$IP" \
     "mkdir -p /home/ubuntu/.aws"
 
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo "❌ Não foi possível conectar à VM."
+    exit "$RC"
+fi
+
 scp \
     -q \
     -o LogLevel=error \
@@ -629,6 +790,13 @@ scp \
     -i "$KEY" \
     "$CREDENTIALS" \
     ubuntu@"$IP":/home/ubuntu/.aws/credentials
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo "❌ Erro ao copiar credenciais."
+    exit "$RC"
+fi
 
 ssh \
     -o LogLevel=error \
@@ -645,6 +813,7 @@ ssh \
 EOF
 
 chmod +x "$HOME_DIR/conectar.sh"
+
 
 # ============================================================
 # ansible.sh
@@ -672,7 +841,11 @@ ANSIBLE_VENV="/tmp/fiap/ansible_venv"
 
 if [ ! -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
     echo "❌ Ansible não está disponível."
-    echo "Execute ~/fiaplab.sh para reconstruir o ambiente."
+    echo ""
+    echo "Execute:"
+    echo "  ~/fiaplab.sh"
+    echo ""
+    echo "O ambiente será reconstruído automaticamente."
     exit 1
 fi
 
@@ -717,6 +890,11 @@ else
     echo ""
 
     read -rp "Escolha o playbook: " NUMERO
+
+    if ! [[ "$NUMERO" =~ ^[0-9]+$ ]]; then
+        echo "❌ Número inválido."
+        exit 1
+    fi
 
     INDEX=$((NUMERO - 1))
 
@@ -763,6 +941,7 @@ EOF
 
 chmod +x "$HOME_DIR/ansible.sh"
 
+
 # ============================================================
 # fiaplab.sh
 # ============================================================
@@ -773,17 +952,28 @@ cat > "$HOME_DIR/fiaplab.sh" <<'EOF'
 # ============================================================
 # FIAP LAB - MENU PRINCIPAL
 #
-# O S3 é a fonte persistente dos projetos com Terraform state.
-#
-# $HOME/environment/config
-#       ↓
-# código Terraform local
+# REGRA DE PROJETOS:
 #
 # S3
-#       ↓
-# projetos que possuem state
+#   -> fonte dos projetos que possuem Terraform State
 #
-# O menu cruza as duas informações.
+# CONFIG LOCAL
+#   -> fonte dos projetos Terraform disponíveis para criação
+#
+# TELA INICIAL:
+#   -> somente projetos do S3
+#
+# SE S3 ESTIVER VAZIO:
+#   -> nenhum projeto é selecionado
+#   -> usuário entra no menu
+#   -> opção 1 mostra projetos locais
+#
+# OPÇÃO 8:
+#   -> somente projetos existentes no S3
+#
+# NÃO usa:
+#   set -e
+#   source comandos.sh
 # ============================================================
 
 ENV_DIR="$HOME/environment"
@@ -798,6 +988,11 @@ ANSIBLE_VENV="$TMP_APP_DIR/ansible_venv"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
 CURRENT_PROJECT=""
+BUCKET_NAME=""
+
+S3_PROJECTS=()
+LOCAL_PROJECTS=()
+
 
 # ============================================================
 # PREPARAR AMBIENTE TEMPORÁRIO
@@ -837,6 +1032,7 @@ EOF2
     fi
 }
 
+
 # ============================================================
 # PREPARAR .TERRAFORM DOS PROJETOS
 # ============================================================
@@ -844,15 +1040,12 @@ EOF2
 prepare_terraform_projects() {
 
     if [ ! -d "$CONFIG_DIR" ]; then
-        return
+        return 0
     fi
 
-    find "$CONFIG_DIR" \
-        -mindepth 1 \
-        -maxdepth 1 \
-        -type d \
-        -print0 |
-    while IFS= read -r -d '' SUBDIR; do
+    for SUBDIR in "$CONFIG_DIR"/*; do
+
+        [ -d "$SUBDIR" ] || continue
 
         if ! find "$SUBDIR" \
             -maxdepth 1 \
@@ -880,6 +1073,7 @@ prepare_terraform_projects() {
     done
 }
 
+
 # ============================================================
 # INSTALAR TERRAFORM SE NECESSÁRIO
 # ============================================================
@@ -903,9 +1097,24 @@ ensure_terraform() {
         -o terraform_1.16.0_linux_amd64.zip \
         https://releases.hashicorp.com/terraform/1.16.0/terraform_1.16.0_linux_amd64.zip
 
+    if [ "$?" -ne 0 ]; then
+        echo "❌ Erro ao baixar Terraform."
+        return 1
+    fi
+
     unzip -o terraform_1.16.0_linux_amd64.zip
 
+    if [ "$?" -ne 0 ]; then
+        echo "❌ Erro ao extrair Terraform."
+        return 1
+    fi
+
     sudo install terraform /usr/local/bin/terraform
+
+    if [ "$?" -ne 0 ]; then
+        echo "❌ Erro ao instalar Terraform."
+        return 1
+    fi
 
     rm -f terraform terraform_1.16.0_linux_amd64.zip
 
@@ -913,6 +1122,7 @@ ensure_terraform() {
     echo "Terraform instalado:"
     terraform version | head -1
 }
+
 
 # ============================================================
 # INSTALAR ANSIBLE SE NECESSÁRIO
@@ -934,15 +1144,26 @@ ensure_ansible() {
 
     python3 -m venv "$ANSIBLE_VENV"
 
+    if [ "$?" -ne 0 ]; then
+        echo "❌ Não foi possível criar o ambiente virtual."
+        return 1
+    fi
+
     "$ANSIBLE_VENV/bin/pip" install \
         --no-cache-dir \
         ansible
+
+    if [ "$?" -ne 0 ]; then
+        echo "❌ Não foi possível instalar o Ansible."
+        return 1
+    fi
 
     export PATH="$ANSIBLE_VENV/bin:$PATH"
 
     echo ""
     echo "Ansible instalado."
 }
+
 
 # ============================================================
 # PREPARAR FERRAMENTAS
@@ -961,6 +1182,7 @@ prepare_tools() {
     prepare_terraform_projects
 }
 
+
 # ============================================================
 # DESCOBRIR BUCKET
 # ============================================================
@@ -971,9 +1193,14 @@ get_bucket() {
         --query Account \
         --output text 2>/dev/null)
 
-    if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+    if [ -z "$ACCOUNT_ID" ] || \
+       [ "$ACCOUNT_ID" = "None" ] || \
+       [ "$ACCOUNT_ID" = "null" ]; then
+
         echo ""
         echo "❌ Não foi possível identificar a conta AWS."
+        echo ""
+
         return 1
     fi
 
@@ -982,13 +1209,24 @@ get_bucket() {
     return 0
 }
 
+
 # ============================================================
 # LISTAR PROJETOS COM STATE NO S3
+#
+# Só considera prefixos que possuam:
+#
+#   <projeto>/terraform.tfstate
+#
+# Não transforma None/null em projeto.
 # ============================================================
 
 get_s3_projects() {
 
     S3_PROJECTS=()
+
+    if [ -z "$BUCKET_NAME" ]; then
+        return 0
+    fi
 
     if ! aws s3api head-bucket \
         --bucket "$BUCKET_NAME" \
@@ -997,23 +1235,51 @@ get_s3_projects() {
         return 0
     fi
 
-    while IFS= read -r PROJECT; do
+    S3_JSON=$(aws s3api list-objects-v2 \
+        --bucket "$BUCKET_NAME" \
+        --output json 2>/dev/null)
 
-        [ -z "$PROJECT" ] && continue
+    if [ -z "$S3_JSON" ]; then
+        return 0
+    fi
 
-        S3_PROJECTS+=("$PROJECT")
+    while IFS= read -r KEY; do
+
+        [ -z "$KEY" ] && continue
+        [ "$KEY" = "None" ] && continue
+        [ "$KEY" = "null" ] && continue
+
+        case "$KEY" in
+            */terraform.tfstate)
+                PROJECT="${KEY%/terraform.tfstate}"
+
+                [ -z "$PROJECT" ] && continue
+                [ "$PROJECT" = "None" ] && continue
+                [ "$PROJECT" = "null" ] && continue
+
+                S3_PROJECTS+=("$PROJECT")
+                ;;
+        esac
 
     done < <(
-        aws s3api list-objects-v2 \
-            --bucket "$BUCKET_NAME" \
-            --delimiter "/" \
-            --query 'CommonPrefixes[].Prefix' \
-            --output text 2>/dev/null |
-        tr '\t' '\n' |
-        sed 's:/$::' |
-        sort
+        echo "$S3_JSON" |
+        jq -r '
+            .Contents[]?.Key? // empty
+        '
     )
+
+    # Remove duplicados.
+    if [ "${#S3_PROJECTS[@]}" -gt 0 ]; then
+
+        mapfile -t S3_PROJECTS < <(
+            printf '%s\n' "${S3_PROJECTS[@]}" |
+            grep -v '^$' |
+            sort -u
+        )
+
+    fi
 }
+
 
 # ============================================================
 # LISTAR PROJETOS TERRAFORM LOCAIS
@@ -1024,10 +1290,12 @@ get_local_projects() {
     LOCAL_PROJECTS=()
 
     if [ ! -d "$CONFIG_DIR" ]; then
-        return
+        return 0
     fi
 
-    while IFS= read -r -d '' DIR; do
+    for DIR in "$CONFIG_DIR"/*; do
+
+        [ -d "$DIR" ] || continue
 
         if find "$DIR" \
             -maxdepth 1 \
@@ -1035,18 +1303,28 @@ get_local_projects() {
             -name "*.tf" |
             grep -q .; then
 
-            LOCAL_PROJECTS+=("$(basename "$DIR")")
+            PROJECT=$(basename "$DIR")
+
+            [ -z "$PROJECT" ] && continue
+            [ "$PROJECT" = "None" ] && continue
+            [ "$PROJECT" = "null" ] && continue
+
+            LOCAL_PROJECTS+=("$PROJECT")
         fi
 
-    done < <(
-        find "$CONFIG_DIR" \
-            -mindepth 1 \
-            -maxdepth 1 \
-            -type d \
-            -print0 |
-        sort -z
-    )
+    done
+
+    if [ "${#LOCAL_PROJECTS[@]}" -gt 0 ]; then
+
+        mapfile -t LOCAL_PROJECTS < <(
+            printf '%s\n' "${LOCAL_PROJECTS[@]}" |
+            grep -v '^$' |
+            sort -u
+        )
+
+    fi
 }
+
 
 # ============================================================
 # TESTAR SE PROJETO POSSUI STATE
@@ -1056,14 +1334,21 @@ project_has_state() {
 
     local PROJECT="$1"
 
+    [ -z "$PROJECT" ] && return 1
+    [ "$PROJECT" = "None" ] && return 1
+    [ "$PROJECT" = "null" ] && return 1
+
     for P in "${S3_PROJECTS[@]}"; do
+
         if [ "$P" = "$PROJECT" ]; then
             return 0
         fi
+
     done
 
     return 1
 }
+
 
 # ============================================================
 # TESTAR SE PROJETO LOCAL EXISTE
@@ -1073,7 +1358,14 @@ project_exists_local() {
 
     local PROJECT="$1"
 
-    [ -d "$CONFIG_DIR/$PROJECT" ] &&
+    [ -z "$PROJECT" ] && return 1
+    [ "$PROJECT" = "None" ] && return 1
+    [ "$PROJECT" = "null" ] && return 1
+
+    if [ ! -d "$CONFIG_DIR/$PROJECT" ]; then
+        return 1
+    fi
+
     find "$CONFIG_DIR/$PROJECT" \
         -maxdepth 1 \
         -type f \
@@ -1081,55 +1373,54 @@ project_exists_local() {
         grep -q .
 }
 
+
 # ============================================================
-# SELECIONAR PROJETO
+# SELECIONAR PROJETO EXISTENTE NO S3
+#
+# Usado:
+#   - inicialização quando existe state
+#   - opção 8
+#
+# SOMENTE projetos do S3.
 # ============================================================
 
-select_project() {
+select_s3_project() {
 
     get_s3_projects
-    get_local_projects
 
-    PROJECTS=()
-
-    # Primeiro entram os projetos do S3.
-    for P in "${S3_PROJECTS[@]}"; do
-        PROJECTS+=("$P")
-    done
-
-    # Depois entram projetos locais que ainda não têm state.
-    for P in "${LOCAL_PROJECTS[@]}"; do
-
-        FOUND=0
-
-        for S3P in "${S3_PROJECTS[@]}"; do
-            if [ "$P" = "$S3P" ]; then
-                FOUND=1
-                break
-            fi
-        done
-
-        if [ "$FOUND" -eq 0 ]; then
-            PROJECTS+=("$P")
-        fi
-    done
-
-    if [ "${#PROJECTS[@]}" -eq 0 ]; then
+    if [ "${#S3_PROJECTS[@]}" -eq 0 ]; then
 
         echo ""
-        echo "❌ Nenhum projeto Terraform encontrado."
-        echo ""
-        echo "Verifique:"
-        echo "   $CONFIG_DIR"
+        echo "⚠️ Nenhum projeto possui state no S3."
         echo ""
 
         return 1
     fi
 
-    # Apenas um projeto.
-    if [ "${#PROJECTS[@]}" -eq 1 ]; then
+    # --------------------------------------------------------
+    # Um único projeto
+    # --------------------------------------------------------
 
-        CURRENT_PROJECT="${PROJECTS[0]}"
+    if [ "${#S3_PROJECTS[@]}" -eq 1 ]; then
+
+        PROJECT="${S3_PROJECTS[0]}"
+
+        if ! project_exists_local "$PROJECT"; then
+
+            echo ""
+            echo "⚠️ O projeto '$PROJECT' existe no S3,"
+            echo "mas não possui código Terraform local:"
+            echo ""
+            echo "   $CONFIG_DIR/$PROJECT"
+            echo ""
+
+            echo "O projeto não pode ser selecionado."
+            echo ""
+
+            return 1
+        fi
+
+        CURRENT_PROJECT="$PROJECT"
 
         echo ""
         echo "Projeto selecionado automaticamente:"
@@ -1139,34 +1430,44 @@ select_project() {
         return 0
     fi
 
+    # --------------------------------------------------------
+    # Vários projetos
+    # --------------------------------------------------------
+
     echo ""
     echo "========================================"
-    echo " PROJETOS"
+    echo " PROJETOS EXISTENTES NO S3"
     echo "========================================"
     echo ""
 
-    for i in "${!PROJECTS[@]}"; do
+    VALID_PROJECTS=()
 
-        P="${PROJECTS[$i]}"
-
-        if project_has_state "$P"; then
-            STATUS="S3 STATE"
-        else
-            STATUS="NOVO"
-        fi
+    for P in "${S3_PROJECTS[@]}"; do
 
         if project_exists_local "$P"; then
-            LOCAL="LOCAL"
+
+            VALID_PROJECTS+=("$P")
+
+            echo "$(( ${#VALID_PROJECTS[@]} )) ) $P"
+
         else
-            LOCAL="SEM CÓDIGO"
+
+            echo "     $P [SEM CÓDIGO LOCAL]"
         fi
 
-        if project_has_state "$P" && ! project_exists_local "$P"; then
-            echo "$((i + 1))) $P [$STATUS / $LOCAL]"
-        else
-            echo "$((i + 1))) $P [$STATUS]"
-        fi
     done
+
+    if [ "${#VALID_PROJECTS[@]}" -eq 0 ]; then
+
+        echo ""
+        echo "❌ Nenhum projeto do S3 possui código Terraform local."
+        echo ""
+        echo "Verifique:"
+        echo "   $CONFIG_DIR"
+        echo ""
+
+        return 1
+    fi
 
     echo ""
 
@@ -1179,26 +1480,9 @@ select_project() {
             INDEX=$((NUMERO - 1))
 
             if [ "$INDEX" -ge 0 ] && \
-               [ "$INDEX" -lt "${#PROJECTS[@]}" ]; then
+               [ "$INDEX" -lt "${#VALID_PROJECTS[@]}" ]; then
 
-                SELECTED="${PROJECTS[$INDEX]}"
-
-                # Não permite executar Terraform sem código local.
-                if ! project_exists_local "$SELECTED"; then
-
-                    echo ""
-                    echo "⚠️ O projeto '$SELECTED' possui state no S3,"
-                    echo "mas não possui código Terraform local:"
-                    echo ""
-                    echo "   $CONFIG_DIR/$SELECTED"
-                    echo ""
-                    echo "Esse projeto não pode ser executado."
-                    echo ""
-
-                    continue
-                fi
-
-                CURRENT_PROJECT="$SELECTED"
+                CURRENT_PROJECT="${VALID_PROJECTS[$INDEX]}"
 
                 echo ""
                 echo "Projeto selecionado: $CURRENT_PROJECT"
@@ -1212,8 +1496,109 @@ select_project() {
     done
 }
 
+
 # ============================================================
-# STATUS RESUMIDO DO MENU
+# SELECIONAR PROJETO PARA CRIAÇÃO
+#
+# Aqui podem aparecer:
+#
+#   projeto existente no S3
+#   projeto novo local
+#
+# Portanto, é diferente da tela inicial.
+# ============================================================
+
+select_create_project() {
+
+    get_s3_projects
+    get_local_projects
+
+    if [ "${#LOCAL_PROJECTS[@]}" -eq 0 ]; then
+
+        echo ""
+        echo "❌ Nenhum projeto Terraform local encontrado."
+        echo ""
+        echo "Verifique:"
+        echo "   $CONFIG_DIR"
+        echo ""
+
+        return 1
+    fi
+
+    CREATE_PROJECTS=()
+
+    for P in "${LOCAL_PROJECTS[@]}"; do
+        CREATE_PROJECTS+=("$P")
+    done
+
+    # --------------------------------------------------------
+    # Apenas um projeto local
+    # --------------------------------------------------------
+
+    if [ "${#CREATE_PROJECTS[@]}" -eq 1 ]; then
+
+        CURRENT_PROJECT="${CREATE_PROJECTS[0]}"
+
+        echo ""
+        echo "Projeto encontrado:"
+        echo "  $CURRENT_PROJECT"
+        echo ""
+
+        return 0
+    fi
+
+    # --------------------------------------------------------
+    # Menu de criação
+    # --------------------------------------------------------
+
+    echo ""
+    echo "========================================"
+    echo " CRIAR INFRAESTRUTURA"
+    echo "========================================"
+    echo ""
+
+    for i in "${!CREATE_PROJECTS[@]}"; do
+
+        P="${CREATE_PROJECTS[$i]}"
+
+        if project_has_state "$P"; then
+            echo "$((i + 1))) $P [S3 STATE]"
+        else
+            echo "$((i + 1))) $P [NOVO]"
+        fi
+
+    done
+
+    echo ""
+
+    while true; do
+
+        read -rp "Escolha o projeto: " NUMERO
+
+        if [[ "$NUMERO" =~ ^[0-9]+$ ]]; then
+
+            INDEX=$((NUMERO - 1))
+
+            if [ "$INDEX" -ge 0 ] && \
+               [ "$INDEX" -lt "${#CREATE_PROJECTS[@]}" ]; then
+
+                CURRENT_PROJECT="${CREATE_PROJECTS[$INDEX]}"
+
+                echo ""
+                echo "Projeto selecionado: $CURRENT_PROJECT"
+                echo ""
+
+                return 0
+            fi
+        fi
+
+        echo "❌ Opção inválida."
+    done
+}
+
+
+# ============================================================
+# STATUS RESUMIDO
 # ============================================================
 
 show_menu_status() {
@@ -1225,23 +1610,20 @@ show_menu_status() {
 
     if [ -n "$CURRENT_PROJECT" ]; then
 
-        if project_has_state "$CURRENT_PROJECT"; then
-            STATE_STATUS="S3 STATE"
-        else
-            STATE_STATUS="NOVO"
-        fi
-
         echo "Projeto atual : $CURRENT_PROJECT"
-        echo "State         : $STATE_STATUS"
+        echo "State         : S3"
 
     else
 
         echo "Projeto atual : nenhum"
+        echo "State         : nenhum projeto selecionado"
+
     fi
 
     echo "========================================"
     echo ""
 }
+
 
 # ============================================================
 # PAUSA
@@ -1252,6 +1634,7 @@ pause_menu() {
     echo ""
     read -rp "Pressione ENTER para continuar..."
 }
+
 
 # ============================================================
 # EXECUTAR OPERAÇÃO
@@ -1279,17 +1662,22 @@ run_operation() {
     echo ""
 
     if [ "$RC" -eq 0 ]; then
+
         echo "========================================"
         echo " Operação concluída."
         echo "========================================"
+
     else
+
         echo "========================================"
         echo " ⚠️ Operação terminou com erro."
         echo "========================================"
+
     fi
 
     return "$RC"
 }
+
 
 # ============================================================
 # INICIALIZAÇÃO
@@ -1298,14 +1686,56 @@ run_operation() {
 prepare_tools
 
 if ! get_bucket; then
+
     pause_menu
     exit 1
 fi
 
-select_project || {
-    pause_menu
-    exit 1
-}
+# ------------------------------------------------------------
+# PRIMEIRO CARREGAMENTO
+#
+# Se houver state no S3:
+#   seleciona somente entre eles.
+#
+# Se S3 estiver vazio:
+#   não seleciona projeto.
+#   opção 1 fará a seleção local.
+# ------------------------------------------------------------
+
+get_s3_projects
+
+if [ "${#S3_PROJECTS[@]}" -gt 0 ]; then
+
+    if ! select_s3_project; then
+
+        echo ""
+        echo "⚠️ Existem states no S3, mas nenhum projeto"
+        echo "pode ser usado com o código local atual."
+        echo ""
+
+        pause_menu
+        exit 1
+    fi
+
+else
+
+    echo ""
+    echo "========================================"
+    echo " FIAP LAB"
+    echo "========================================"
+    echo ""
+    echo "⚠️ Nenhum projeto possui infraestrutura"
+    echo "registrada no S3."
+    echo ""
+    echo "Para criar uma nova infraestrutura,"
+    echo "selecione a opção:"
+    echo ""
+    echo "  1) Criar infraestrutura"
+    echo ""
+
+    CURRENT_PROJECT=""
+fi
+
 
 # ============================================================
 # MENU PRINCIPAL
@@ -1313,11 +1743,16 @@ select_project || {
 
 while true; do
 
-    # Recria estruturas temporárias caso o CloudShell
-    # tenha limpado /tmp.
+    # --------------------------------------------------------
+    # Recupera /tmp caso o CloudShell tenha limpado.
+    # --------------------------------------------------------
+
     prepare_tools
 
-    # Atualiza informações do S3.
+    # --------------------------------------------------------
+    # Atualiza lista do S3.
+    # --------------------------------------------------------
+
     get_s3_projects
 
     show_menu_status
@@ -1337,59 +1772,209 @@ while true; do
 
     case "$OPCAO" in
 
+        # ----------------------------------------------------
+        # CRIAR
+        # ----------------------------------------------------
+
         1)
-            run_operation "criar.sh"
+
+            if select_create_project; then
+
+                run_operation "criar.sh"
+
+                # Depois do primeiro apply, o projeto deverá
+                # aparecer no S3.
+                get_s3_projects
+
+            fi
+
             pause_menu
             ;;
+
+
+        # ----------------------------------------------------
+        # LIGAR
+        # ----------------------------------------------------
 
         2)
-            run_operation "ligar.sh"
+
+            if [ -z "$CURRENT_PROJECT" ]; then
+
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+                echo "Use primeiro:"
+                echo "  1) Criar infraestrutura"
+                echo ""
+
+            else
+
+                run_operation "ligar.sh"
+
+            fi
+
             pause_menu
             ;;
 
+
+        # ----------------------------------------------------
+        # SUSPENDER
+        # ----------------------------------------------------
+
         3)
-            run_operation "suspender.sh"
+
+            if [ -z "$CURRENT_PROJECT" ]; then
+
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+
+            else
+
+                run_operation "suspender.sh"
+
+            fi
+
             pause_menu
             ;;
+
+
+        # ----------------------------------------------------
+        # SSH
+        # ----------------------------------------------------
 
         4)
 
-            echo ""
-            read -rp "Número da VM: " NUMERO
+            if [ -z "$CURRENT_PROJECT" ]; then
 
-            if [[ ! "$NUMERO" =~ ^[0-9]+$ ]]; then
-                echo "❌ Número inválido."
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+
             else
-                "$HOME/conectar.sh" "$CURRENT_PROJECT" "$NUMERO"
+
+                echo ""
+                read -rp "Número da VM: " NUMERO
+
+                if ! [[ "$NUMERO" =~ ^[0-9]+$ ]] || \
+                   [ "$NUMERO" -lt 1 ]; then
+
+                    echo "❌ Número inválido."
+
+                else
+
+                    "$HOME/conectar.sh" \
+                        "$CURRENT_PROJECT" \
+                        "$NUMERO"
+
+                fi
+
             fi
 
             pause_menu
             ;;
 
+
+        # ----------------------------------------------------
+        # ANSIBLE
+        # ----------------------------------------------------
+
         5)
-            run_operation "ansible.sh"
+
+            if [ -z "$CURRENT_PROJECT" ]; then
+
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+
+            else
+
+                run_operation "ansible.sh"
+
+            fi
+
             pause_menu
             ;;
+
+
+        # ----------------------------------------------------
+        # IP
+        # ----------------------------------------------------
 
         6)
-            run_operation "ip"
+
+            if [ -z "$CURRENT_PROJECT" ]; then
+
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+
+            else
+
+                run_operation "ip"
+
+            fi
+
             pause_menu
             ;;
 
+
+        # ----------------------------------------------------
+        # DESTROY
+        # ----------------------------------------------------
+
         7)
-            run_operation "destruir.sh"
+
+            if [ -z "$CURRENT_PROJECT" ]; then
+
+                echo ""
+                echo "❌ Nenhum projeto selecionado."
+                echo ""
+
+            else
+
+                run_operation "destruir.sh"
+
+            fi
+
             pause_menu
             ;;
+
+
+        # ----------------------------------------------------
+        # TROCAR PROJETO
+        #
+        # SOMENTE S3.
+        # ----------------------------------------------------
 
         8)
 
-            if select_project; then
+            if [ "${#S3_PROJECTS[@]}" -eq 0 ]; then
+
                 echo ""
-                echo "✅ Projeto alterado para: $CURRENT_PROJECT"
+                echo "⚠️ Não existem projetos no S3."
+                echo ""
+                echo "Para criar o primeiro projeto:"
+                echo "  1) Criar infraestrutura"
+                echo ""
+
+            else
+
+                if select_s3_project; then
+                    echo ""
+                    echo "✅ Projeto alterado para:"
+                    echo "   $CURRENT_PROJECT"
+                fi
+
             fi
 
             pause_menu
             ;;
+
+
+        # ----------------------------------------------------
+        # SAIR
+        # ----------------------------------------------------
 
         0)
 
@@ -1398,18 +1983,25 @@ while true; do
             exit 0
             ;;
 
+
+        # ----------------------------------------------------
+        # INVÁLIDO
+        # ----------------------------------------------------
+
         *)
 
             echo ""
             echo "❌ Opção inválida."
             pause_menu
             ;;
+
     esac
 
 done
 EOF
 
 chmod +x "$HOME_DIR/fiaplab.sh"
+
 
 # ============================================================
 # FINAL
