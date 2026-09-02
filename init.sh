@@ -6,39 +6,70 @@ set -e
 # Região padrão para os recursos do Backend no S3 / DynamoDB
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
-# Diretório base do projeto (substitua se o caminho da pasta "config" for diferente)
+# Diretório base do projeto
 PASTA_ENV="$HOME/environment"
 PASTA_CONFIG="$PASTA_ENV/config"
-#PASTA_CONFIG="${PASTA_CONFIG:-$HOME/enviroment/config}"
+PASTA_CRED="$PASTA_ENV/credenciais"
 
 # ------------------------------------------------------------
 # CLONAR CONFIG
 # ------------------------------------------------------------
-
 if [ ! -d "$PASTA_CONFIG/.git" ]; then
-
     echo ""
     echo "📦 Clonando repositório tonanuvem/config..."
-
     rm -rf "$PASTA_CONFIG"
-
-    git clone \
-        https://github.com/tonanuvem/config \
-        "$PASTA_CONFIG"
-
+    git clone https://github.com/tonanuvem/config "$PASTA_CONFIG"
 else
-
     echo ""
     echo "📦 Repositório config já existe."
-
-    cd "$PASTA_CONFIG"
-
     echo "🔄 Atualizando repositório..."
-
-    git pull --ff-only || true
-
+    (cd "$PASTA_CONFIG" && git pull --ff-only || true)
 fi
 
+# ------------------------------------------------------------
+# GERAR CREDENCIAIS DA AWS
+# ------------------------------------------------------------
+echo "============================================================"
+echo "    GERANDO ARQUIVO DE CREDENCIAIS DA AWS"
+echo "============================================================"
+echo ""
+
+if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] && [ -n "$AWS_CONTAINER_AUTHORIZATION_TOKEN" ]; then
+    CREDS=$(curl -s -H "Authorization: $AWS_CONTAINER_AUTHORIZATION_TOKEN" "$AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    
+    KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId // empty')
+    SECRET_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey // empty')
+    SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Token // empty')
+
+    if [ -n "$KEY_ID" ]; then
+        mkdir -p "$PASTA_CRED"
+
+        cat > "$PASTA_CRED/credentials" <<EOF
+[default]
+aws_access_key_id = ${KEY_ID}
+aws_secret_access_key = ${SECRET_KEY}
+aws_session_token = ${SESSION_TOKEN}
+EOF
+
+        cat > "$PASTA_CRED/config" <<EOF
+[default]
+region = us-east-1
+output = json
+EOF
+
+        # Exporta variáveis para forçar ferramentas (como Ansible) a usarem estes arquivos
+        export AWS_SHARED_CREDENTIALS_FILE="$PASTA_CRED/credentials"
+        export AWS_CONFIG_FILE="$PASTA_CRED/config"
+
+        echo "✅ Arquivos em $PASTA_CRED gerados com sucesso!"
+    else
+        echo "⚠️ Não foi possível extrair os campos do JSON de credenciais."
+    fi
+else
+    echo "⚠️ Variáveis de ambiente do CloudShell não encontradas."
+fi
+
+echo ""
 echo "============================================================"
 echo "    INICIALIZANDO AMBIENTE NO AWS CLOUDSHELL"
 echo "============================================================"
@@ -140,7 +171,7 @@ if [ -d "$PASTA_CONFIG" ]; then
         
         mkdir -p "$TMP_TF_DATA"
         
-        # Se for um diretório real em vez de um link simbólico, remove para economizar espaço em disk/home
+        # Se for um diretório real em vez de um link simbólico, remove para economizar espaço na home
         if [ -d "$SUBDIR/.terraform" ] && [ ! -L "$SUBDIR/.terraform" ]; then
             rm -rf "$SUBDIR/.terraform"
         fi
@@ -251,8 +282,5 @@ df -h /tmp
 
 echo ""
 echo "============================================================"
-echo "🚀 PRONTO PARA USO! "
+echo "🚀 PRONTO PARA USO!"
 echo "============================================================"
-
-# Ver exemplo do ubuntu-vm para configurar S3 nas outras subpastas
-# Dentro de cada subpasta (ex: ubuntu-vm/backend.tf):
