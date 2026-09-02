@@ -319,6 +319,7 @@ echo ""
 echo "--- Armazenamento Temporário (/tmp - 10GB) ---"
 df -h /tmp
 
+echo ""
 echo "============================================================"
 echo "    CONFIGURAÇÕES DOS COMANDOS"
 echo "============================================================"
