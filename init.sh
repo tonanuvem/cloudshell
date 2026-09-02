@@ -44,8 +44,8 @@ elif [ -f "$HOME/labsuser.pem" ]; then
     cp -f "$HOME/labsuser.pem" "$PASTA_ENV/labsuser.pem"
     chmod 400 "$PASTA_ENV/labsuser.pem"
 
-    printf "\t\tPermissão configurada: 400\n"
-    printf "\t\tArquivo: $PASTA_ENV/labsuser.pem\n\n"
+    printf "\tPermissão configurada: 400\n"
+    printf "\tArquivo: $PASTA_ENV/labsuser.pem\n\n"
 
 else
     echo ""
