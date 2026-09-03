@@ -46,11 +46,502 @@ CRED_DIR="$ENV_DIR/credenciais"
 mkdir -p "$CONFIG_DIR"
 
 # ============================================================
+# .fiaplab.lib.sh  -  biblioteca comum
+#
+# Gerada primeiro: todos os demais scripts a carregam com
+# "source". Antes desta lib, o bloco de credenciais estava
+# copiado em 6 scripts e ausente em outros 2.
+# ============================================================
+
+cat > "$HOME_DIR/.fiaplab.lib.sh" <<'LIBEOF'
+#!/bin/bash
+
+# ============================================================
+# FIAP LAB - BIBLIOTECA COMUM
+#
+# Carregada por todos os scripts:
+#
+#     source "$HOME/.fiaplab.lib.sh"
+#
+# Concentra o que antes estava copiado em 6 scripts (e ausente
+# em outros 2, ja tendo divergido entre eles):
+#
+#   - credenciais AWS
+#   - descoberta e cache do account id
+#   - preparo do /tmp, que o CloudShell apaga entre sessoes
+#   - terraform init
+#
+# Nao usa "set -e": os scripts tratam RC explicitamente.
+# ============================================================
+
+FIAPLAB_CFG="$HOME/.fiaplab"
+
+ENV_DIR="$HOME/environment"
+CONFIG_DIR="$ENV_DIR/config"
+CRED_DIR="$ENV_DIR/credenciais"
+
+TMP_APP_DIR="/tmp/fiap"
+TF_CACHE="$TMP_APP_DIR/tf_cache"
+TF_PROJECTS="$TMP_APP_DIR/tf_projects"
+ANSIBLE_VENV="$TMP_APP_DIR/ansible_venv"
+
+TERRAFORM_VERSION="1.16.0"
+
+AWS_REGION="${AWS_REGION:-us-east-1}"
+
+ACCOUNT_ID=""
+BUCKET_NAME=""
+
+
+# ============================================================
+# CACHE PERSISTENTE  (~/.fiaplab)
+#
+# O $HOME sobrevive entre sessoes do CloudShell; o /tmp nao.
+# Guardamos aqui o que e caro ou impossivel de redescobrir com
+# a credencial vencida -- em especial o account id, do qual o
+# nome do bucket de state e derivado.
+# ============================================================
+
+cfg_get() {
+
+    [ -f "$FIAPLAB_CFG" ] || return 1
+
+    sed -n "s/^$1=//p" "$FIAPLAB_CFG" | tail -1
+}
+
+cfg_set() {
+
+    local TMP
+
+    touch "$FIAPLAB_CFG" 2>/dev/null || return 1
+
+    # Reescrita atomica em vez de "sed -i": evita a diferenca de
+    # sintaxe entre GNU e BSD e nao deixa o arquivo truncado se a
+    # sessao cair no meio da escrita.
+    TMP=$(mktemp) || return 1
+
+    grep -v "^$1=" "$FIAPLAB_CFG" > "$TMP" 2>/dev/null
+
+    printf '%s=%s\n' "$1" "$2" >> "$TMP"
+
+    mv "$TMP" "$FIAPLAB_CFG" || return 1
+
+    chmod 600 "$FIAPLAB_CFG" 2>/dev/null
+
+    return 0
+}
+
+
+# ============================================================
+# ARQUIVO ESTATICO DE CREDENCIAIS
+#
+# Le o endpoint de credenciais do CloudShell e materializa o
+# par credentials/config.
+#
+# ATENCAO: este arquivo NAO e a fonte de credenciais do CLI.
+# Ele existe por um motivo so -- o conectar.sh e o ajustar.sh
+# precisam de um arquivo para copiar via scp para dentro da VM.
+# ============================================================
+
+aws_write_credentials_file() {
+
+    [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] || return 1
+    [ -n "$AWS_CONTAINER_AUTHORIZATION_TOKEN" ]  || return 1
+
+    local CREDS KEY SECRET TOKEN
+
+    CREDS=$(curl -s --max-time 5 \
+        -H "Authorization: $AWS_CONTAINER_AUTHORIZATION_TOKEN" \
+        "$AWS_CONTAINER_CREDENTIALS_FULL_URI" 2>/dev/null)
+
+    [ -n "$CREDS" ] || return 1
+
+    KEY=$(printf '%s' "$CREDS"    | jq -r '.AccessKeyId // empty'     2>/dev/null)
+    SECRET=$(printf '%s' "$CREDS" | jq -r '.SecretAccessKey // empty' 2>/dev/null)
+    TOKEN=$(printf '%s' "$CREDS"  | jq -r '.Token // empty'           2>/dev/null)
+
+    [ -n "$KEY" ] || return 1
+
+    mkdir -p "$CRED_DIR" || return 1
+    chmod 700 "$CRED_DIR" 2>/dev/null
+
+    (
+        umask 077
+
+        printf '[default]\naws_access_key_id = %s\naws_secret_access_key = %s\naws_session_token = %s\n' \
+            "$KEY" "$SECRET" "$TOKEN" > "$CRED_DIR/credentials"
+
+        printf '[default]\nregion = %s\noutput = json\n' \
+            "$AWS_REGION" > "$CRED_DIR/config"
+    )
+
+    return 0
+}
+
+
+# ============================================================
+# aws_login : garante credencial valida AGORA
+#
+# O CloudShell expoe um provedor de credenciais que se renova
+# sozinho (AWS_CONTAINER_CREDENTIALS_FULL_URI). Os scripts
+# antigos exportavam AWS_SHARED_CREDENTIALS_FILE apontando para
+# um snapshot gravado la no init.sh -- e como o arquivo tem
+# precedencia sobre o provedor nativo, isso DESLIGAVA a renovacao
+# automatica e produzia o ExpiredToken depois de algum tempo.
+#
+# Ordem adotada aqui:
+#
+#   1) provedor nativo do CloudShell   (renova sozinho)
+#   2) arquivo estatico recem-gerado   (fallback)
+#
+# Assim um "terraform apply" longo renova a credencial no meio
+# do caminho, coisa que o arquivo estatico nunca faria.
+# ============================================================
+
+aws_login() {
+
+    export AWS_DEFAULT_REGION="$AWS_REGION"
+    export AWS_EC2_METADATA_DISABLED=true
+
+    # Sempre materializa um arquivo fresco: e o insumo do scp.
+    aws_write_credentials_file
+
+    if [ -f "$CRED_DIR/config" ]; then
+        export AWS_CONFIG_FILE="$CRED_DIR/config"
+    fi
+
+    # 1) Provedor nativo: nao fixar arquivo.
+    if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ]; then
+
+        unset AWS_SHARED_CREDENTIALS_FILE
+
+        if aws sts get-caller-identity >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    # 2) Fallback: arquivo estatico.
+    if [ -f "$CRED_DIR/credentials" ]; then
+
+        export AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials"
+
+        if aws sts get-caller-identity >/dev/null 2>&1; then
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
+
+# ============================================================
+# aws_require : porta de entrada de toda operacao AWS
+#
+# Chamado imediatamente antes de cada operacao, nao no boot.
+# ============================================================
+
+aws_require() {
+
+    aws_login && return 0
+
+    echo ""
+    echo "========================================"
+    echo " SESSAO AWS EXPIRADA"
+    echo "========================================"
+    echo ""
+    echo "As credenciais temporarias do laboratorio venceram."
+    echo ""
+    echo "O que fazer:"
+    echo ""
+    echo "  1. Volte ao AWS Academy e clique em 'Start Lab'"
+    echo "     (aguarde o circulo ficar VERDE)."
+    echo ""
+    echo "  2. Feche esta aba do CloudShell e abra novamente."
+    echo ""
+    echo "  3. Execute:  ~/fiaplab.sh"
+    echo ""
+    echo "Sua infraestrutura na AWS nao foi perdida."
+    echo ""
+
+    return 1
+}
+
+
+# ============================================================
+# get_account_id : online, com fallback no cache
+#
+# O nome do bucket de state deriva do account id. Com o cache,
+# o menu continua sabendo onde esta o state mesmo com a
+# credencial vencida, em vez de morrer no boot.
+# ============================================================
+
+get_account_id() {
+
+    local ID
+
+    ID=$(aws sts get-caller-identity \
+        --query Account \
+        --output text 2>/dev/null)
+
+    if [[ "$ID" =~ ^[0-9]{12}$ ]]; then
+        cfg_set ACCOUNT_ID "$ID"
+    else
+        ID=$(cfg_get ACCOUNT_ID)
+    fi
+
+    [[ "$ID" =~ ^[0-9]{12}$ ]] || return 1
+
+    ACCOUNT_ID="$ID"
+    BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
+
+    cfg_set BUCKET_NAME "$BUCKET_NAME"
+    cfg_set AWS_REGION "$AWS_REGION"
+
+    return 0
+}
+
+
+# ============================================================
+# AMBIENTE TEMPORARIO
+#
+# O CloudShell preserva o $HOME (1 GB) e apaga o /tmp entre
+# sessoes. Terraform e Ansible ficam no /tmp de proposito, para
+# nao consumir a cota do $HOME.
+# ============================================================
+
+prepare_tmp_environment() {
+
+    mkdir -p "$TF_CACHE" "$TF_PROJECTS" "$ANSIBLE_VENV"
+
+    export TF_PLUGIN_CACHE_DIR="$TF_CACHE"
+
+    case ":$PATH:" in
+        *":$ANSIBLE_VENV/bin:"*) ;;
+        *) export PATH="$ANSIBLE_VENV/bin:$PATH" ;;
+    esac
+
+    export ANSIBLE_PYTHON_INTERPRETER=auto_silent
+    export ANSIBLE_DEPRECATION_WARNINGS=false
+    export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
+
+    printf 'plugin_cache_dir = "%s"\ndisable_checkpoint = true\n' \
+        "$TF_CACHE" > "$HOME/.terraformrc"
+}
+
+
+# ============================================================
+# LINKS .terraform DOS PROJETOS
+# ============================================================
+
+prepare_terraform_projects() {
+
+    [ -d "$CONFIG_DIR" ] || return 0
+
+    local SUBDIR PROJECT TMP_TF_DATA
+
+    for SUBDIR in "$CONFIG_DIR"/*; do
+
+        [ -d "$SUBDIR" ] || continue
+
+        find "$SUBDIR" -maxdepth 1 -type f -name "*.tf" |
+            grep -q . || continue
+
+        PROJECT=$(basename "$SUBDIR")
+        TMP_TF_DATA="$TF_PROJECTS/$PROJECT"
+
+        mkdir -p "$TMP_TF_DATA"
+
+        if [ -d "$SUBDIR/.terraform" ] && [ ! -L "$SUBDIR/.terraform" ]; then
+            rm -rf "$SUBDIR/.terraform"
+        fi
+
+        if [ ! -L "$SUBDIR/.terraform" ]; then
+            ln -s "$TMP_TF_DATA" "$SUBDIR/.terraform"
+        fi
+
+    done
+}
+
+
+# ============================================================
+# TERRAFORM
+# ============================================================
+
+ensure_terraform() {
+
+    command -v terraform >/dev/null 2>&1 && return 0
+
+    echo ""
+    echo ">> Instalando Terraform ${TERRAFORM_VERSION}..."
+    echo ""
+
+    local ZIP="terraform_${TERRAFORM_VERSION}_linux_amd64.zip"
+    local URL="https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/${ZIP}"
+
+    # Subshell: o "cd /tmp" solto que existia aqui mudava o
+    # diretorio corrente do fiaplab.sh inteiro.
+    (
+        cd /tmp || exit 1
+
+        rm -f "$ZIP" terraform
+
+        curl -fsSL -o "$ZIP" "$URL" || exit 1
+        unzip -o -q "$ZIP"          || exit 1
+
+        sudo install terraform /usr/local/bin/terraform || exit 1
+
+        rm -f terraform "$ZIP"
+    )
+
+    if [ "$?" -ne 0 ]; then
+        echo ""
+        echo "Nao foi possivel instalar o Terraform ${TERRAFORM_VERSION}."
+        echo "Verifique a conexao de rede e tente novamente."
+        echo ""
+        return 1
+    fi
+
+    echo ""
+    terraform version | head -1
+
+    return 0
+}
+
+
+# ============================================================
+# ANSIBLE
+# ============================================================
+
+ensure_ansible() {
+
+    if [ -x "$ANSIBLE_VENV/bin/ansible" ] && \
+       [ -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
+        return 0
+    fi
+
+    echo ""
+    echo ">> Recriando ambiente virtual do Ansible..."
+    echo ""
+
+    rm -rf "$ANSIBLE_VENV"
+
+    python3 -m venv "$ANSIBLE_VENV" || {
+        echo "Nao foi possivel criar o ambiente virtual."
+        return 1
+    }
+
+    "$ANSIBLE_VENV/bin/pip" install --no-cache-dir ansible || {
+        echo "Nao foi possivel instalar o Ansible."
+        return 1
+    }
+
+    export PATH="$ANSIBLE_VENV/bin:$PATH"
+
+    return 0
+}
+
+
+# ============================================================
+# prepare_tools : reconstroi o /tmp apagado pelo CloudShell
+# ============================================================
+
+prepare_tools() {
+
+    prepare_tmp_environment
+    ensure_terraform || return 1
+    ensure_ansible   || return 1
+    prepare_terraform_projects
+
+    return 0
+}
+
+
+# ============================================================
+# TERRAFORM INIT
+#
+# tf_ensure_init resolve o sintoma mais comum do lab: o aluno
+# fecha e reabre o CloudShell, o /tmp e apagado, o .terraform
+# (symlink para /tmp) fica vazio e as opcoes ligar/suspender/
+# conectar/ip passam a falhar com "Backend initialization
+# required" ate ele rodar "Criar infraestrutura" de novo.
+# ============================================================
+
+tf_init() {
+
+    local PROJECT="$1"
+    local TF_DIR="$CONFIG_DIR/$PROJECT"
+
+    [ -n "$BUCKET_NAME" ] || get_account_id || return 1
+
+    terraform -chdir="$TF_DIR" init -reconfigure -input=false \
+        -backend-config="bucket=$BUCKET_NAME" \
+        -backend-config="key=${PROJECT}/terraform.tfstate" \
+        -backend-config="region=$AWS_REGION" \
+        -backend-config="use_lockfile=true"
+}
+
+tf_ensure_init() {
+
+    local PROJECT="$1"
+    local TF_DIR="$CONFIG_DIR/$PROJECT"
+
+    if [ -d "$TF_DIR/.terraform/providers" ] && \
+       [ -f "$TF_DIR/.terraform/terraform.tfstate" ]; then
+        return 0
+    fi
+
+    echo ""
+    echo ">> Reconstruindo ambiente Terraform"
+    echo "   (o CloudShell apaga o /tmp entre sessoes)..."
+    echo ""
+
+    tf_init "$PROJECT" >/dev/null 2>&1 && return 0
+
+    # Repete sem silenciar para o erro real aparecer.
+    tf_init "$PROJECT"
+}
+
+
+# ============================================================
+# INSTANCIAS DO STATE
+#
+# Le os IDs direto do state. Os scripts antigos rodavam
+# "terraform refresh" (deprecado) so para listar IDs -- uma ida
+# a AWS de varios segundos para obter dados que nao mudam.
+# ============================================================
+
+tf_instance_ids() {
+
+    local PROJECT="$1"
+    local TF_DIR="$CONFIG_DIR/$PROJECT"
+
+    terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+        jq -r '.. | objects | select(.type? == "aws_instance") | .instances[]? | .attributes.id? // empty' \
+        2>/dev/null
+}
+
+tf_public_ips() {
+
+    local PROJECT="$1"
+    local TF_DIR="$CONFIG_DIR/$PROJECT"
+
+    terraform -chdir="$TF_DIR" output -json 2>/dev/null |
+        jq -r '.ip_externo.value? | if type == "string" then . else (.. | strings) end' \
+        2>/dev/null
+}
+LIBEOF
+
+chmod 600 "$HOME_DIR/.fiaplab.lib.sh"
+
+
+# ============================================================
 # criar.sh
 # ============================================================
 
 cat > "$HOME_DIR/criar.sh" <<'EOF'
 #!/bin/bash
+
+source "$HOME/.fiaplab.lib.sh"
 
 PROJECT="$1"
 
@@ -59,7 +550,7 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado:"
@@ -73,27 +564,14 @@ if ! find "$TF_DIR" -maxdepth 1 -type f -name "*.tf" | grep -q .; then
     exit 1
 fi
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+# Credencial renovada agora, nao no boot do init.sh.
+aws_require || exit 1
 
-if [ -f "$HOME/environment/credenciais/credentials" ]; then
-    export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
-fi
-
-if [ -f "$HOME/environment/credenciais/config" ]; then
-    export AWS_CONFIG_FILE="$HOME/environment/credenciais/config"
-fi
-
-ACCOUNT_ID=$(aws sts get-caller-identity \
-    --query Account \
-    --output text)
-
-if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+if ! get_account_id; then
     echo "❌ Não foi possível identificar a conta AWS."
     exit 1
 fi
 
-BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-# DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
 
 echo ""
@@ -127,11 +605,7 @@ fi
 
 echo ">> Terraform init..."
 
-terraform -chdir="$TF_DIR" init -reconfigure \
-    -backend-config="bucket=$BUCKET_NAME" \
-    -backend-config="key=$TFSTATE_KEY" \
-    -backend-config="region=$AWS_REGION" \
-    -backend-config="use_lockfile=true"
+tf_init "$PROJECT"
 
 RC=$?
 
@@ -217,6 +691,8 @@ chmod +x "$HOME_DIR/criar.sh"
 cat > "$HOME_DIR/destruir.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -224,7 +700,7 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado:"
@@ -232,27 +708,14 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+# Credencial renovada agora, nao no boot do init.sh.
+aws_require || exit 1
 
-if [ -f "$HOME/environment/credenciais/credentials" ]; then
-    export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
-fi
-
-if [ -f "$HOME/environment/credenciais/config" ]; then
-    export AWS_CONFIG_FILE="$HOME/environment/credenciais/config"
-fi
-
-ACCOUNT_ID=$(aws sts get-caller-identity \
-    --query Account \
-    --output text)
-
-if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
+if ! get_account_id; then
     echo "❌ Não foi possível identificar a conta AWS."
     exit 1
 fi
 
-BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-# DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
 
 echo ""
@@ -275,11 +738,7 @@ fi
 
 echo ">> Terraform init..."
 
-terraform -chdir="$TF_DIR" init -reconfigure \
-    -backend-config="bucket=$BUCKET_NAME" \
-    -backend-config="key=$TFSTATE_KEY" \
-    -backend-config="region=$AWS_REGION" \
-    -backend-config="use_lockfile=true"
+tf_init "$PROJECT"
 
 RC=$?
 
@@ -318,6 +777,8 @@ chmod +x "$HOME_DIR/destruir.sh"
 cat > "$HOME_DIR/status.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -325,20 +786,16 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado: $PROJECT"
     exit 1
 fi
 
-if [ -f "$HOME/environment/credenciais/credentials" ]; then
-    export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
-fi
+aws_require || exit 1
 
-if [ -f "$HOME/environment/credenciais/config" ]; then
-    export AWS_CONFIG_FILE="$HOME/environment/credenciais/config"
-fi
+tf_ensure_init "$PROJECT" || exit 1
 
 echo ""
 echo "========================================"
@@ -404,6 +861,8 @@ chmod +x "$HOME_DIR/status.sh"
 cat > "$HOME_DIR/ip" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -411,18 +870,22 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado: $PROJECT"
     exit 1
 fi
 
+aws_require || exit 1
+
+tf_ensure_init "$PROJECT" || exit 1
+
 echo ""
 echo "Atualizando state..."
 echo ""
 
-terraform -chdir="$TF_DIR" refresh
+terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false
 
 RC=$?
 
@@ -436,15 +899,7 @@ echo ""
 echo "IPs externos:"
 echo ""
 
-terraform -chdir="$TF_DIR" output -json 2>/dev/null |
-    jq -r '
-        .ip_externo.value? |
-        if type == "string" then
-            .
-        else
-            .. | strings
-        end
-    ' 2>/dev/null
+tf_public_ips "$PROJECT"
 EOF
 
 chmod +x "$HOME_DIR/ip"
@@ -457,6 +912,8 @@ chmod +x "$HOME_DIR/ip"
 cat > "$HOME_DIR/ligar.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -464,22 +921,16 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado: $PROJECT"
     exit 1
 fi
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+aws_require || exit 1
 
-if [ -f "$HOME/environment/credenciais/credentials" ]; then
-    export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
-fi
-
-if [ -f "$HOME/environment/credenciais/config" ]; then
-    export AWS_CONFIG_FILE="$HOME/environment/credenciais/config"
-fi
+tf_ensure_init "$PROJECT" || exit 1
 
 echo ""
 echo "========================================"
@@ -487,36 +938,15 @@ echo " LIGAR VM(S)"
 echo "========================================"
 echo ""
 
-terraform -chdir="$TF_DIR" refresh
-
-RC=$?
-
-if [ "$RC" -ne 0 ]; then
-    echo ""
-    echo "❌ Terraform refresh terminou com erro."
-    exit "$RC"
-fi
-
-STATE_JSON=$(terraform -chdir="$TF_DIR" show -json)
-
-RC=$?
-
-if [ "$RC" -ne 0 ] || [ -z "$STATE_JSON" ]; then
-    echo "❌ Não foi possível obter o Terraform state."
-    exit 1
-fi
-
-IDS=($(echo "$STATE_JSON" |
-    jq -r '
-        .. |
-        objects |
-        select(.type? == "aws_instance") |
-        .instances[]? |
-        .attributes.id?
-    '))
+# Os IDs de instancia nao mudam: basta ler o state, sem a ida
+# a AWS que o "terraform refresh" (deprecado) fazia aqui.
+mapfile -t IDS < <(tf_instance_ids "$PROJECT")
 
 if [ "${#IDS[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform."
+    echo ""
+    echo "Use primeiro a opção:  1) Criar infraestrutura"
+    echo ""
     exit 1
 fi
 
@@ -589,6 +1019,8 @@ chmod +x "$HOME_DIR/ligar.sh"
 cat > "$HOME_DIR/suspender.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -596,22 +1028,16 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado: $PROJECT"
     exit 1
 fi
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
+aws_require || exit 1
 
-if [ -f "$HOME/environment/credenciais/credentials" ]; then
-    export AWS_SHARED_CREDENTIALS_FILE="$HOME/environment/credenciais/credentials"
-fi
-
-if [ -f "$HOME/environment/credenciais/config" ]; then
-    export AWS_CONFIG_FILE="$HOME/environment/credenciais/config"
-fi
+tf_ensure_init "$PROJECT" || exit 1
 
 echo ""
 echo "========================================"
@@ -619,36 +1045,15 @@ echo " SUSPENDER VM(S)"
 echo "========================================"
 echo ""
 
-terraform -chdir="$TF_DIR" refresh
-
-RC=$?
-
-if [ "$RC" -ne 0 ]; then
-    echo ""
-    echo "❌ Terraform refresh terminou com erro."
-    exit "$RC"
-fi
-
-STATE_JSON=$(terraform -chdir="$TF_DIR" show -json)
-
-RC=$?
-
-if [ "$RC" -ne 0 ] || [ -z "$STATE_JSON" ]; then
-    echo "❌ Não foi possível obter o Terraform state."
-    exit 1
-fi
-
-IDS=($(echo "$STATE_JSON" |
-    jq -r '
-        .. |
-        objects |
-        select(.type? == "aws_instance") |
-        .instances[]? |
-        .attributes.id?
-    '))
+# Os IDs de instancia nao mudam: basta ler o state, sem a ida
+# a AWS que o "terraform refresh" (deprecado) fazia aqui.
+mapfile -t IDS < <(tf_instance_ids "$PROJECT")
 
 if [ "${#IDS[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform."
+    echo ""
+    echo "Use primeiro a opção:  1) Criar infraestrutura"
+    echo ""
     exit 1
 fi
 
@@ -721,6 +1126,8 @@ chmod +x "$HOME_DIR/suspender.sh"
 cat > "$HOME_DIR/conectar.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 NODENUM="${2:-1}"
 
@@ -738,7 +1145,7 @@ if ! [[ "$NODENUM" =~ ^[0-9]+$ ]] || [ "$NODENUM" -lt 1 ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado:"
@@ -746,14 +1153,20 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
-KEY="$HOME/environment/labsuser.pem"
-CREDENTIALS="$HOME/environment/credenciais/credentials"
+KEY="$ENV_DIR/labsuser.pem"
+CREDENTIALS="$CRED_DIR/credentials"
 
 if [ ! -f "$KEY" ]; then
     echo "❌ Chave SSH não encontrada:"
     echo "   $KEY"
     exit 1
 fi
+
+# Regenera o arquivo de credenciais imediatamente antes do scp,
+# para a VM nao receber um token ja vencido.
+aws_require || exit 1
+
+tf_ensure_init "$PROJECT" || exit 1
 
 if [ ! -f "$CREDENTIALS" ]; then
     echo "❌ Credenciais AWS não encontradas:"
@@ -767,7 +1180,7 @@ echo ""
 echo "Atualizando IP..."
 echo ""
 
-terraform -chdir="$TF_DIR" refresh
+terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false
 
 RC=$?
 
@@ -777,19 +1190,7 @@ if [ "$RC" -ne 0 ]; then
     exit "$RC"
 fi
 
-IPS=(
-    $(
-        terraform -chdir="$TF_DIR" output -json 2>/dev/null |
-        jq -r '
-            .ip_externo.value? |
-            if type == "string" then
-                .
-            else
-                .. | strings
-            end
-        ' 2>/dev/null
-    )
-)
+mapfile -t IPS < <(tf_public_ips "$PROJECT")
 
 INDEX=$((NODENUM - 1))
 IP="${IPS[$INDEX]}"
@@ -841,6 +1242,12 @@ if [ "$RC" -ne 0 ]; then
     exit "$RC"
 fi
 
+if [ -f "$CRED_DIR/config" ]; then
+    scp -q -o LogLevel=error -o StrictHostKeyChecking=no -i "$KEY" \
+        "$CRED_DIR/config" \
+        ubuntu@"$IP":/home/ubuntu/.aws/config
+fi
+
 ssh \
     -o LogLevel=error \
     -o StrictHostKeyChecking=no \
@@ -865,6 +1272,8 @@ chmod +x "$HOME_DIR/conectar.sh"
 cat > "$HOME_DIR/ansible.sh" <<'EOF'
 #!/bin/bash
 
+source "$HOME/.fiaplab.lib.sh"
+
 PROJECT="$1"
 
 if [ -z "$PROJECT" ]; then
@@ -872,7 +1281,7 @@ if [ -z "$PROJECT" ]; then
     exit 1
 fi
 
-TF_DIR="$HOME/environment/config/$PROJECT"
+TF_DIR="$CONFIG_DIR/$PROJECT"
 
 if [ ! -d "$TF_DIR" ]; then
     echo "❌ Projeto não encontrado:"
@@ -880,22 +1289,11 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
-ANSIBLE_VENV="/tmp/fiap/ansible_venv"
+# O /tmp pode ter sido apagado pelo CloudShell: a lib reconstroi
+# o venv em vez de mandar o aluno reiniciar o menu.
+prepare_tmp_environment
 
-if [ ! -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
-    echo "❌ Ansible não está disponível."
-    echo ""
-    echo "Execute:"
-    echo "  ~/fiaplab.sh"
-    echo ""
-    echo "O ambiente será reconstruído automaticamente."
-    exit 1
-fi
-
-export PATH="$ANSIBLE_VENV/bin:$PATH"
-export ANSIBLE_PYTHON_INTERPRETER=auto_silent
-export ANSIBLE_DEPRECATION_WARNINGS=false
-export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
+ensure_ansible || exit 1
 
 PLAYBOOKS=()
 
@@ -957,7 +1355,7 @@ echo "Projeto : $PROJECT"
 echo "Playbook: $(basename "$PLAYBOOK")"
 echo ""
 
-INVENTORY="$HOME/environment/config/hosts"
+INVENTORY="$CONFIG_DIR/hosts"
 
 if [ ! -f "$INVENTORY" ]; then
     echo "❌ Inventory não encontrado:"
@@ -1019,238 +1417,18 @@ cat > "$HOME_DIR/fiaplab.sh" <<'EOF'
 #   source comandos.sh
 # ============================================================
 
-ENV_DIR="$HOME/environment"
-CONFIG_DIR="$ENV_DIR/config"
-CRED_DIR="$ENV_DIR/credenciais"
-
-TMP_APP_DIR="/tmp/fiap"
-TF_CACHE="$TMP_APP_DIR/tf_cache"
-TF_PROJECTS="$TMP_APP_DIR/tf_projects"
-ANSIBLE_VENV="$TMP_APP_DIR/ansible_venv"
-
-AWS_REGION="${AWS_REGION:-us-east-1}"
+# A lib traz: credenciais, account id, /tmp, terraform e ansible.
+# Antes, estas ~200 linhas viviam duplicadas aqui e nos demais
+# scripts, ja com divergencias entre as copias.
+source "$HOME/.fiaplab.lib.sh"
 
 CURRENT_PROJECT=""
-BUCKET_NAME=""
 
 S3_PROJECTS=()
 LOCAL_PROJECTS=()
 
-
-# ============================================================
-# PREPARAR AMBIENTE TEMPORÁRIO
-# ============================================================
-
-prepare_tmp_environment() {
-
-    mkdir -p "$TF_CACHE"
-    mkdir -p "$TF_PROJECTS"
-    mkdir -p "$ANSIBLE_VENV"
-
-    export TF_PLUGIN_CACHE_DIR="$TF_CACHE"
-
-    case ":$PATH:" in
-        *":$ANSIBLE_VENV/bin:"*)
-            ;;
-        *)
-            export PATH="$ANSIBLE_VENV/bin:$PATH"
-            ;;
-    esac
-
-    export ANSIBLE_PYTHON_INTERPRETER=auto_silent
-    export ANSIBLE_DEPRECATION_WARNINGS=false
-    export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
-
-    cat > "$HOME/.terraformrc" <<EOF2
-plugin_cache_dir = "$TF_CACHE"
-disable_checkpoint = true
-EOF2
-
-    if [ -f "$CRED_DIR/credentials" ]; then
-        export AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials"
-    fi
-
-    if [ -f "$CRED_DIR/config" ]; then
-        export AWS_CONFIG_FILE="$CRED_DIR/config"
-    fi
-}
-
-
-# ============================================================
-# PREPARAR .TERRAFORM DOS PROJETOS
-# ============================================================
-
-prepare_terraform_projects() {
-
-    if [ ! -d "$CONFIG_DIR" ]; then
-        return 0
-    fi
-
-    for SUBDIR in "$CONFIG_DIR"/*; do
-
-        [ -d "$SUBDIR" ] || continue
-
-        if ! find "$SUBDIR" \
-            -maxdepth 1 \
-            -type f \
-            -name "*.tf" |
-            grep -q .; then
-            continue
-        fi
-
-        PROJECT=$(basename "$SUBDIR")
-        TMP_TF_DATA="$TF_PROJECTS/$PROJECT"
-
-        mkdir -p "$TMP_TF_DATA"
-
-        if [ -d "$SUBDIR/.terraform" ] && \
-           [ ! -L "$SUBDIR/.terraform" ]; then
-
-            rm -rf "$SUBDIR/.terraform"
-        fi
-
-        if [ ! -L "$SUBDIR/.terraform" ]; then
-            ln -s "$TMP_TF_DATA" "$SUBDIR/.terraform"
-        fi
-
-    done
-}
-
-
-# ============================================================
-# INSTALAR TERRAFORM SE NECESSÁRIO
-# ============================================================
-
-ensure_terraform() {
-
-    if command -v terraform >/dev/null 2>&1; then
-        return 0
-    fi
-
-    echo ""
-    echo "⚠️ Terraform não encontrado."
-    echo ">> Instalando Terraform 1.16.0..."
-    echo ""
-
-    cd /tmp || return 1
-
-    rm -f terraform_1.16.0_linux_amd64.zip terraform
-
-    curl -fsSL \
-        -o terraform_1.16.0_linux_amd64.zip \
-        https://releases.hashicorp.com/terraform/1.16.0/terraform_1.16.0_linux_amd64.zip
-
-    if [ "$?" -ne 0 ]; then
-        echo "❌ Erro ao baixar Terraform."
-        return 1
-    fi
-
-    unzip -o terraform_1.16.0_linux_amd64.zip
-
-    if [ "$?" -ne 0 ]; then
-        echo "❌ Erro ao extrair Terraform."
-        return 1
-    fi
-
-    sudo install terraform /usr/local/bin/terraform
-
-    if [ "$?" -ne 0 ]; then
-        echo "❌ Erro ao instalar Terraform."
-        return 1
-    fi
-
-    rm -f terraform terraform_1.16.0_linux_amd64.zip
-
-    echo ""
-    echo "Terraform instalado:"
-    terraform version | head -1
-}
-
-
-# ============================================================
-# INSTALAR ANSIBLE SE NECESSÁRIO
-# ============================================================
-
-ensure_ansible() {
-
-    if [ -x "$ANSIBLE_VENV/bin/ansible" ] && \
-       [ -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
-        return 0
-    fi
-
-    echo ""
-    echo "⚠️ Ansible não encontrado."
-    echo ">> Recriando ambiente virtual..."
-    echo ""
-
-    rm -rf "$ANSIBLE_VENV"
-
-    python3 -m venv "$ANSIBLE_VENV"
-
-    if [ "$?" -ne 0 ]; then
-        echo "❌ Não foi possível criar o ambiente virtual."
-        return 1
-    fi
-
-    "$ANSIBLE_VENV/bin/pip" install \
-        --no-cache-dir \
-        ansible
-
-    if [ "$?" -ne 0 ]; then
-        echo "❌ Não foi possível instalar o Ansible."
-        return 1
-    fi
-
-    export PATH="$ANSIBLE_VENV/bin:$PATH"
-
-    echo ""
-    echo "Ansible instalado."
-}
-
-
-# ============================================================
-# PREPARAR FERRAMENTAS
-# ============================================================
-
-prepare_tools() {
-
-    prepare_tmp_environment
-
-    ensure_terraform
-
-    ensure_ansible
-
-    prepare_tmp_environment
-
-    prepare_terraform_projects
-}
-
-
-# ============================================================
-# DESCOBRIR BUCKET
-# ============================================================
-
-get_bucket() {
-
-    ACCOUNT_ID=$(aws sts get-caller-identity \
-        --query Account \
-        --output text 2>/dev/null)
-
-    if [ -z "$ACCOUNT_ID" ] || \
-       [ "$ACCOUNT_ID" = "None" ] || \
-       [ "$ACCOUNT_ID" = "null" ]; then
-
-        echo ""
-        echo "❌ Não foi possível identificar a conta AWS."
-        echo ""
-
-        return 1
-    fi
-
-    BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-
-    return 0
-}
+# ok | expirado | sem_bucket | sem_conta | erro
+S3_STATUS="ok"
 
 
 # ============================================================
@@ -1266,21 +1444,37 @@ get_bucket() {
 get_s3_projects() {
 
     S3_PROJECTS=()
+    S3_STATUS="ok"
 
     if [ -z "$BUCKET_NAME" ]; then
-        return 0
+        S3_STATUS="sem_conta"
+        return 1
     fi
 
-    if ! aws s3api head-bucket \
-        --bucket "$BUCKET_NAME" \
-        >/dev/null 2>&1; then
+    local S3_JSON S3_ERR
 
-        return 0
+    # O erro era silenciado com 2>/dev/null e o array vazio fazia o
+    # menu dizer "nenhum projeto no S3" -- inclusive quando o motivo
+    # era token vencido, mandando o aluno recriar infra que existe.
+    S3_ERR=$(aws s3api list-objects-v2 \
+        --bucket "$BUCKET_NAME" \
+        --output json 2>&1 >"$TMP_APP_DIR/s3.json")
+
+    if [ "$?" -ne 0 ]; then
+
+        case "$S3_ERR" in
+            *ExpiredToken*|*InvalidClientTokenId*|*RequestExpired*)
+                S3_STATUS="expirado" ;;
+            *NoSuchBucket*|*NotFound*|*404*)
+                S3_STATUS="sem_bucket" ;;
+            *)
+                S3_STATUS="erro" ;;
+        esac
+
+        return 1
     fi
 
-    S3_JSON=$(aws s3api list-objects-v2 \
-        --bucket "$BUCKET_NAME" \
-        --output json 2>/dev/null)
+    S3_JSON=$(cat "$TMP_APP_DIR/s3.json" 2>/dev/null)
 
     if [ -z "$S3_JSON" ]; then
         return 0
@@ -1650,18 +1844,30 @@ show_menu_status() {
     echo "========================================"
     echo " FIAP LAB"
     echo "========================================"
+    echo "Conta AWS     : ${ACCOUNT_ID:-desconhecida}"
 
     if [ -n "$CURRENT_PROJECT" ]; then
-
         echo "Projeto atual : $CURRENT_PROJECT"
-        echo "State         : S3"
-
+        echo "State         : s3://$BUCKET_NAME/$CURRENT_PROJECT"
     else
-
         echo "Projeto atual : nenhum"
         echo "State         : nenhum projeto selecionado"
-
     fi
+
+    case "$S3_STATUS" in
+        expirado)
+            echo "----------------------------------------"
+            echo "Credencial    : VENCIDA"
+            echo ""
+            echo "Clique em 'Start Lab' no AWS Academy e"
+            echo "reabra o CloudShell. A infraestrutura na"
+            echo "AWS continua intacta."
+            ;;
+        erro)
+            echo "----------------------------------------"
+            echo "Credencial    : erro ao consultar o S3"
+            ;;
+    esac
 
     echo "========================================"
     echo ""
@@ -1696,6 +1902,9 @@ run_operation() {
         return 1
     fi
 
+    # Renova a credencial na hora da operacao, nao no boot.
+    aws_require || return 1
+
     echo ""
 
     "$HOME/$SCRIPT" "$CURRENT_PROJECT"
@@ -1726,9 +1935,32 @@ run_operation() {
 # INICIALIZAÇÃO
 # ============================================================
 
-prepare_tools
+prepare_tools || {
+    echo ""
+    echo "❌ Não foi possível preparar as ferramentas do lab."
+    echo ""
+    pause_menu
+    exit 1
+}
 
-if ! get_bucket; then
+aws_require
+
+# O account id vem do cache em ~/.fiaplab quando a chamada online
+# falha, entao o menu abre mesmo com credencial vencida: o aluno ve
+# o estado do lab e a instrucao do que fazer, em vez de ser expulso.
+if ! get_account_id; then
+
+    echo ""
+    echo "========================================"
+    echo " FIAP LAB"
+    echo "========================================"
+    echo ""
+    echo "Ainda não foi possível identificar a conta AWS."
+    echo ""
+    echo "Verifique se o laboratório está iniciado no AWS Academy"
+    echo "(botão 'Start Lab', círculo verde) e abra o CloudShell"
+    echo "novamente."
+    echo ""
 
     pause_menu
     exit 1
@@ -1747,18 +1979,40 @@ fi
 
 get_s3_projects
 
+LAST_PROJECT=$(cfg_get LAST_PROJECT)
+
 if [ "${#S3_PROJECTS[@]}" -gt 0 ]; then
 
-    if ! select_s3_project; then
+    # Retoma o ultimo projeto usado, se ele ainda existir.
+    if [ -n "$LAST_PROJECT" ] && \
+       project_has_state "$LAST_PROJECT" && \
+       project_exists_local "$LAST_PROJECT"; then
+
+        CURRENT_PROJECT="$LAST_PROJECT"
+
+        echo ""
+        echo "Projeto retomado: $CURRENT_PROJECT"
+        echo ""
+
+    elif ! select_s3_project; then
 
         echo ""
         echo "⚠️ Existem states no S3, mas nenhum projeto"
         echo "pode ser usado com o código local atual."
         echo ""
+        echo "Use a opção 1) Criar infraestrutura."
+        echo ""
 
-        pause_menu
-        exit 1
+        CURRENT_PROJECT=""
     fi
+
+elif [ "$S3_STATUS" != "ok" ]; then
+
+    echo ""
+    echo "⚠️ Não foi possível listar os projetos no S3."
+    echo ""
+
+    CURRENT_PROJECT=""
 
 else
 
@@ -1797,6 +2051,10 @@ while true; do
     # --------------------------------------------------------
 
     get_s3_projects
+
+    if [ -n "$CURRENT_PROJECT" ]; then
+        cfg_set LAST_PROJECT "$CURRENT_PROJECT"
+    fi
 
     show_menu_status
 
