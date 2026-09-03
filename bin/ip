@@ -31,7 +31,7 @@ for region in us-east-1 us-west-2; do
         --query "Reservations[*].Instances[*].[PublicIpAddress, Tags[?Key=='Name'].Value|[0]]" \
         --output text |
         grep -v None |
-        awk -F'\t' '{ print $1 "\t(" $2 ")" }'
+        awk -F'\t' '{ printf "%-16s(%s)\n", $1, $2 }'
 done
 
 # ------------------------------------------------------------
