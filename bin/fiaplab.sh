@@ -18,7 +18,11 @@
 # do repositorio config.
 # ============================================================
 
-source "$HOME/.fiaplab.lib.sh"
+# Localiza o proprio diretorio (bin/) para achar a lib e os
+# scripts irmaos, sem depender de copias no $HOME.
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+source "$BIN_DIR/fiaplab.lib.sh"
 
 # Projeto unico: retomado do cache, com default ubuntu-vm.
 CURRENT_PROJECT="$(cfg_get LAST_PROJECT)"
@@ -43,7 +47,7 @@ run_operation() {
 
     echo ""
 
-    "$HOME/$SCRIPT" "$CURRENT_PROJECT"
+    "$BIN_DIR/$SCRIPT" "$CURRENT_PROJECT"
 
     local RC=$?
 
@@ -103,12 +107,12 @@ destruir_ou_refazer() {
             echo ""
             echo ">> Destruindo ambiente atual..."
             echo ""
-            "$HOME/destruir.sh" "$CURRENT_PROJECT"
+            "$BIN_DIR/destruir.sh" "$CURRENT_PROJECT"
 
             echo ""
             echo ">> Recriando ambiente..."
             echo ""
-            "$HOME/criar.sh" "$CURRENT_PROJECT"
+            "$BIN_DIR/criar.sh" "$CURRENT_PROJECT"
             RC=$?
 
             echo ""
@@ -216,7 +220,7 @@ while true; do
         3)
             if aws_require; then
                 echo ""
-                "$HOME/conectar.sh" "$CURRENT_PROJECT" 1
+                "$BIN_DIR/conectar.sh" "$CURRENT_PROJECT" 1
             fi
             pause_menu
             ;;

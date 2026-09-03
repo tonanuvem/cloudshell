@@ -172,12 +172,13 @@ fi
 [ -f "$HOME/.terraformrc" ] && rm -f "$HOME/.terraformrc" && echo "🗑️ ~/.terraformrc removido."
 [ -f "$HOME/.fiaplab" ] && rm -f "$HOME/.fiaplab" && echo "🗑️ ~/.fiaplab removido."
 
-# Comandos instalados no $HOME.
+# Lancador no $HOME + copias antigas de versoes anteriores
+# (quando os comandos eram copiados para o $HOME).
 for CMD in fiaplab.sh criar.sh destruir.sh status.sh ligar.sh \
            suspender.sh conectar.sh ansible.sh ip .fiaplab.lib.sh; do
     [ -f "$HOME/$CMD" ] && rm -f "$HOME/$CMD"
 done
-echo "🗑️ Comandos do FIAP LAB removidos do \$HOME."
+echo "🗑️ Lançador e comandos do FIAP LAB removidos do \$HOME."
 
 echo ""
 echo "============================================================"

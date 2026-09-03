@@ -1,87 +1,46 @@
 #!/bin/bash
 
 # ============================================================
-# FIAP LAB - INSTALADOR DE COMANDOS
+# FIAP LAB - INSTALADOR DO LANCADOR
 #
-# Copia os comandos do FIAP LAB para o $HOME.
+# Os comandos do FIAP LAB rodam a partir de bin/, sem copias no
+# $HOME: cada script localiza a lib e os irmaos pelo proprio
+# diretorio (BIN_DIR).
 #
-# Historico: ate a migracao, este script GERAVA cada comando via
-# heredoc (eram ~2000 linhas de shell dentro de shell). Agora os
-# comandos sao arquivos reais em bin/ -- versionaveis, com
-# highlight, verificaveis por shellcheck e com git diff legivel.
-# Este script apenas os instala.
+# Este script instala apenas o lancador ~/fiaplab.sh, para o
+# aluno continuar digitando "~/fiaplab.sh". O lancador aponta
+# para bin/fiaplab.sh deste repositorio.
 #
-# Instala:
-#
-#   bin/fiaplab.lib.sh -> $HOME/.fiaplab.lib.sh   (biblioteca comum)
-#   bin/fiaplab.sh     -> $HOME/fiaplab.sh        (menu principal)
-#   bin/criar.sh       -> $HOME/criar.sh
-#   bin/destruir.sh    -> $HOME/destruir.sh
-#   bin/status.sh      -> $HOME/status.sh
-#   bin/ligar.sh       -> $HOME/ligar.sh
-#   bin/suspender.sh   -> $HOME/suspender.sh
-#   bin/conectar.sh    -> $HOME/conectar.sh
-#   bin/ansible.sh     -> $HOME/ansible.sh
-#   bin/ip             -> $HOME/ip
+# Historico: antes este script GERAVA cada comando via heredoc;
+# depois passou a COPIAR bin/* para o $HOME; agora so instala o
+# lancador. bin/ e a unica fonte de verdade.
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$SCRIPT_DIR/bin"
 
-if [ ! -d "$BIN_DIR" ]; then
-    echo "❌ Diretório de comandos não encontrado: $BIN_DIR"
+if [ ! -x "$BIN_DIR/fiaplab.sh" ]; then
+    echo "❌ Menu não encontrado: $BIN_DIR/fiaplab.sh"
     exit 1
 fi
 
-# Executaveis instalados no $HOME (a lib e tratada a parte).
-COMANDOS=(
-    fiaplab.sh
-    criar.sh
-    destruir.sh
-    status.sh
-    ligar.sh
-    suspender.sh
-    conectar.sh
-    ansible.sh
-    ip
-)
+LAUNCHER="$HOME/fiaplab.sh"
 
-# ------------------------------------------------------------
-# Biblioteca comum (dotfile, so leitura do dono)
-# ------------------------------------------------------------
+# Lancador com o caminho do repo embutido. Regerado a cada init,
+# entao acompanha o local do repositorio se ele mudar.
+cat > "$LAUNCHER" <<LAUNCH
+#!/bin/bash
+# Lancador gerado por comandos.sh -- executa o menu a partir do
+# repositorio. NAO edite: edite $BIN_DIR/fiaplab.sh.
+exec "$BIN_DIR/fiaplab.sh" "\$@"
+LAUNCH
 
-if [ ! -f "$BIN_DIR/fiaplab.lib.sh" ]; then
-    echo "❌ Biblioteca não encontrada: $BIN_DIR/fiaplab.lib.sh"
-    exit 1
-fi
-
-cp -f "$BIN_DIR/fiaplab.lib.sh" "$HOME/.fiaplab.lib.sh" || {
-    echo "❌ Não foi possível instalar a biblioteca."
-    exit 1
-}
-chmod 600 "$HOME/.fiaplab.lib.sh"
-
-# ------------------------------------------------------------
-# Comandos
-# ------------------------------------------------------------
-
-for CMD in "${COMANDOS[@]}"; do
-
-    if [ ! -f "$BIN_DIR/$CMD" ]; then
-        echo "❌ Comando não encontrado: $BIN_DIR/$CMD"
-        exit 1
-    fi
-
-    cp -f "$BIN_DIR/$CMD" "$HOME/$CMD" || {
-        echo "❌ Não foi possível instalar: $CMD"
-        exit 1
-    }
-    chmod +x "$HOME/$CMD"
-
-done
+chmod +x "$LAUNCHER"
 
 echo ""
 echo "========================================"
-echo " COMANDOS INSTALADOS"
+echo " LANÇADOR INSTALADO"
 echo "========================================"
+echo ""
+echo "Execute:  ~/fiaplab.sh"
 echo ""
