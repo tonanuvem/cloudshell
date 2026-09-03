@@ -260,6 +260,8 @@ echo "========================================"
 echo "    CRIANDO FIAP LAB : MAQUINA VIRTUAL"
 echo "========================================"
 
+reset_known_hosts
+
 bash "$SCRIPT_DIR/bin/criar.sh" "$PROJETO_PADRAO"
 
 RC=$?

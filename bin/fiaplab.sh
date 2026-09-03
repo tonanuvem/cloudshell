@@ -112,6 +112,7 @@ destruir_ou_refazer() {
             echo ""
             echo ">> Recriando ambiente..."
             echo ""
+            reset_known_hosts
             "$BIN_DIR/criar.sh" "$CURRENT_PROJECT"
             RC=$?
 
@@ -166,6 +167,9 @@ fi
 # ============================================================
 # MENU PRINCIPAL
 # ============================================================
+
+# Limpa host keys antigas de VMs recriadas antes de qualquer conexao.
+reset_known_hosts
 
 while true; do
 
