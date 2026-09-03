@@ -1,45 +1,55 @@
 #!/bin/bash
 
-# Localiza o proprio diretorio (bin/) para achar a lib e os
-# scripts irmaos, sem depender de copias no $HOME.
+# ============================================================
+# ip - IPs do ambiente + acesso ao code-server
+#
+# Lista as instancias com IP publico nas regioes usadas pelo lab
+# (via AWS CLI, sem terraform refresh) e mostra a URL do
+# code-server da VM do fiaplab.
+#
+# Aceita um argumento opcional (projeto), ignorado -- e mantido
+# so para compatibilidade com quem chama "ip <projeto>".
+# ============================================================
+
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 source "$BIN_DIR/fiaplab.lib.sh"
 
-PROJECT="$1"
-
-if [ -z "$PROJECT" ]; then
-    echo "Uso: ~/ip <projeto>"
-    exit 1
-fi
-
-TF_DIR="$CONFIG_DIR/$PROJECT"
-
-if [ ! -d "$TF_DIR" ]; then
-    echo "❌ Projeto não encontrado: $PROJECT"
-    exit 1
-fi
-
 aws_require || exit 1
 
-tf_ensure_init "$PROJECT" || exit 1
+# ------------------------------------------------------------
+# IPs de todas as instancias (2 regioes)
+# ------------------------------------------------------------
 
 echo ""
-echo "Atualizando state..."
+echo "IPs do ambiente:"
 echo ""
 
-terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false
+for region in us-east-1 us-west-2; do
+    aws ec2 describe-instances \
+        --region "$region" \
+        --query "Reservations[*].Instances[*].[PublicIpAddress, Tags[?Key=='Name'].Value|[0]]" \
+        --output text | grep -v None
+done
 
-RC=$?
+# ------------------------------------------------------------
+# Acesso ao code-server (VM do fiaplab, em execucao)
+# ------------------------------------------------------------
 
-if [ "$RC" -ne 0 ]; then
-    echo ""
-    echo "❌ Terraform refresh terminou com erro."
-    exit "$RC"
+echo ""
+echo "Acesso ao FIAP LAB (Code Server):"
+echo ""
+
+IP=$(aws ec2 describe-instances \
+    --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
+              "Name=instance-state-name,Values=running" \
+    --query 'Reservations[].Instances[].PublicIpAddress' \
+    --output text 2>/dev/null | head -1)
+
+if [ -n "$IP" ] && [ "$IP" != "None" ]; then
+    echo "http://$IP:${CODE_SERVER_PORT}"
+else
+    echo "(a VM do FIAP LAB não está em execução)"
 fi
 
 echo ""
-echo "IPs externos:"
-echo ""
-
-tf_public_ips "$PROJECT"
