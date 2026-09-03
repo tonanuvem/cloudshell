@@ -45,16 +45,23 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8099}"
 FIAPLAB_NAME_FILTER="${FIAPLAB_NAME_FILTER:-fiaplab-*}"
 
+# Senha do code-server, exibida no destaque do menu. Espelha o default
+# do playbook ansible_code_server_ubuntu.yml (repo config); sobrescreva
+# com CODE_SERVER_PASSWORD se mudar la.
+CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-fiap}"
+
 # Cores ANSI para destacar a URL do code-server no menu. So quando
 # a saida e um terminal (tty); em pipe/arquivo ficam vazias.
 if [ -t 1 ]; then
     C_OFF=$'\033[0m'
     C_DIM=$'\033[2m'
+    C_BOLD=$'\033[1m'
     C_URL=$'\033[1;96m'      # ciano brilhante, negrito
     C_BADGE=$'\033[1;42;97m' # branco negrito sobre fundo verde
 else
     C_OFF=""
     C_DIM=""
+    C_BOLD=""
     C_URL=""
     C_BADGE=""
 fi
@@ -596,6 +603,8 @@ show_vm_status() {
             echo "  ${C_DIM}copie e cole a URL abaixo (o clique não abre no CloudShell):${C_OFF}"
             echo ""
             echo "      ${C_URL}http://$IP:${CODE_SERVER_PORT}${C_OFF}"
+            echo ""
+            echo "      senha: ${C_BOLD}${CODE_SERVER_PASSWORD}${C_OFF}"
             echo ""
         elif [ "$STATE" = "running" ]; then
             echo "Code-server : aguardando IP público..."
