@@ -41,17 +41,18 @@ if [ ! -d "$PASTA_CONFIG/.git" ]; then
         exit 1
     }
 else
-    PULL_ERR=$(
-        cd "$PASTA_CONFIG" 2>/dev/null &&
-        git pull --ff-only 2>&1 >/dev/null
-    )
+    # Decide pelo exit code, nao pela saida: o "git pull" escreve o
+    # resumo do fetch (From ... / a..b main -> origin/main) no stderr
+    # mesmo quando tem sucesso, entao capturar stderr dava falso alarme.
+    PULL_OUT=$(cd "$PASTA_CONFIG" && git pull --ff-only 2>&1)
+    PULL_RC=$?
 
-    if [ -n "$PULL_ERR" ]; then
+    if [ "$PULL_RC" -ne 0 ]; then
         echo ""
         echo "   ⚠️ Não foi possível atualizar o repositório de configuração."
         echo ""
         echo "   Motivo:"
-        echo "   $PULL_ERR"
+        echo "$PULL_OUT" | sed 's/^/   /'
         echo ""
         echo "   Seguindo com a cópia local. Se você editou arquivos em"
         echo "   $PASTA_CONFIG, mova-os para fora da pasta e rode de novo."
