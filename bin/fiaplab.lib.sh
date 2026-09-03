@@ -140,6 +140,50 @@ reset_known_hosts() {
 
 
 # ============================================================
+# wait_for_ssh : espera o sshd da VM ficar pronto
+#
+# O "terraform apply" retorna quando a instancia esta "running"
+# (EC2), mas o boot do SO + sshd leva mais 20-60s. Sem esperar, o
+# scp/ansible do ajustar.sh falha com "Connection refused" na
+# porta 22. Testa a porta 22 via /dev/tcp (sem depender de nc).
+# ============================================================
+
+_port_aberta() {
+    local IP="$1" PORT="$2"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 5 bash -c "exec 3<>/dev/tcp/$IP/$PORT" 2>/dev/null
+    else
+        (exec 3<>"/dev/tcp/$IP/$PORT") 2>/dev/null
+    fi
+}
+
+wait_for_ssh() {
+
+    local IP="$1"
+    local PORT="${2:-22}"
+    local MAX="${3:-40}"     # 40 tentativas x 3s ~ 2 min
+    local i=0
+
+    [ -n "$IP" ] || return 1
+
+    printf "   Aguardando SSH em %s " "$IP"
+
+    while [ "$i" -lt "$MAX" ]; do
+        if _port_aberta "$IP" "$PORT"; then
+            echo " pronto."
+            return 0
+        fi
+        printf "."
+        sleep 3
+        i=$((i + 1))
+    done
+
+    echo " tempo esgotado."
+    return 1
+}
+
+
+# ============================================================
 # ARQUIVO ESTATICO DE CREDENCIAIS
 #
 # Le o endpoint de credenciais do CloudShell e materializa o
