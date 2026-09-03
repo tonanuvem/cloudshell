@@ -114,6 +114,20 @@ echo ""
 
 if [ -f "$AJUSTAR_SCRIPT" ]; then
 
+    # Espera o sshd das VMs subir antes do ajustar.sh: o apply retorna
+    # com a instancia "running", mas o SSH so aceita conexao depois do
+    # boot. Sem isto, o scp/ansible falha com "Connection refused".
+    mapfile -t VM_IPS < <(ec2_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
+
+    if [ "${#VM_IPS[@]}" -gt 0 ]; then
+        echo ">> Aguardando as VMs aceitarem SSH..."
+        for VM_IP in "${VM_IPS[@]}"; do
+            wait_for_ssh "$VM_IP" ||
+                echo "   ⚠️ $VM_IP não respondeu SSH a tempo; seguindo mesmo assim."
+        done
+        echo ""
+    fi
+
     echo ">> Executando ajustar.sh..."
     echo ""
     echo "   $AJUSTAR_SCRIPT"
