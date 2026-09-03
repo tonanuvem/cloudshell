@@ -258,7 +258,6 @@ echo ""
 echo "========================================"
 echo "    CRIANDO FIAP LAB : MAQUINA VIRTUAL"
 echo "========================================"
-echo ""
 
 bash "$HOME/criar.sh" "$PROJETO_PADRAO"
 
