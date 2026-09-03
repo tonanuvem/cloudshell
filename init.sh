@@ -61,14 +61,14 @@ else
 fi
 
 # ============================================================
-# 2. INSTALAR COMANDOS E BIBLIOTECA
+# 2. INSTALAR O LANCADOR E CARREGAR A LIB
 #
-# Copia bin/* para o $HOME. Antes os comandos eram gerados via
-# heredoc; agora sao arquivos reais em bin/ e este passo apenas
-# os instala.
+# Os comandos rodam a partir de bin/ (sem copias no $HOME). Este
+# passo so instala o lancador ~/fiaplab.sh, que aponta para
+# $SCRIPT_DIR/bin/fiaplab.sh.
 # ============================================================
 
-echo ">> Instalando comandos do FIAP LAB..."
+echo ">> Instalando lançador do FIAP LAB..."
 
 bash "$SCRIPT_DIR/comandos.sh" >/dev/null
 
@@ -76,13 +76,13 @@ RC=$?
 
 if [ "$RC" -ne 0 ]; then
     echo ""
-    echo "❌ Erro ao instalar os comandos do FIAP LAB."
+    echo "❌ Erro ao instalar o lançador do FIAP LAB."
     echo ""
     exit "$RC"
 fi
 
-# A partir daqui, tudo vem da lib.
-source "$HOME/.fiaplab.lib.sh"
+# A partir daqui, tudo vem da lib (carregada direto do bin/).
+source "$SCRIPT_DIR/bin/fiaplab.lib.sh"
 
 # ============================================================
 # 3. SSH KEY
@@ -260,7 +260,7 @@ echo "========================================"
 echo "    CRIANDO FIAP LAB : MAQUINA VIRTUAL"
 echo "========================================"
 
-bash "$HOME/criar.sh" "$PROJETO_PADRAO"
+bash "$SCRIPT_DIR/bin/criar.sh" "$PROJETO_PADRAO"
 
 RC=$?
 
@@ -292,7 +292,7 @@ echo ""
 df -h /tmp
 echo ""
 
-bash "$HOME/ip" "$PROJETO_PADRAO"
+bash "$SCRIPT_DIR/bin/ip" "$PROJETO_PADRAO"
 
 echo ""
 echo "========================================"

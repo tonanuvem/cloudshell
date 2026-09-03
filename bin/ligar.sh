@@ -1,6 +1,10 @@
 #!/bin/bash
 
-source "$HOME/.fiaplab.lib.sh"
+# Localiza o proprio diretorio (bin/) para achar a lib e os
+# scripts irmaos, sem depender de copias no $HOME.
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+source "$BIN_DIR/fiaplab.lib.sh"
 
 PROJECT="$1"
 

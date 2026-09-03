@@ -5,7 +5,7 @@
 #
 # Carregada por todos os scripts:
 #
-#     source "$HOME/.fiaplab.lib.sh"
+#     source "$BIN_DIR/fiaplab.lib.sh"
 #
 # Concentra o que antes estava copiado em 6 scripts (e ausente
 # em outros 2, ja tendo divergido entre eles):
