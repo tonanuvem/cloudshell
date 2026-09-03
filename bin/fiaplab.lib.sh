@@ -493,40 +493,55 @@ tf_public_ips() {
 
 
 # ============================================================
-# STATUS DA VM VIA AWS CLI
+# INSTANCIAS DA CONTA (via AWS CLI)
 #
-# Rapido (~1s) e independente do Terraform e do /tmp: consulta a
-# AWS direto pela tag Name, em vez do "terraform refresh" que
-# levava dezenas de segundos. Alem disso traz o IP publico ATUAL
-# -- que muda a cada stop/start e ficava desatualizado no state.
+# Uma unica chamada, rapida (~1s) e independente do Terraform e
+# do /tmp. Uma linha por instancia nao-terminada, colunas:
 #
-# Imprime o estado da VM e a URL do code-server. Retorna 0 se
-# encontrou alguma instancia, 1 caso contrario.
+#     NOME <TAB> ESTADO <TAB> IP_PUBLICO <TAB> TIPO <TAB> ID
+#
+# Campos ausentes vem como "None".
+# ============================================================
+
+ec2_account_instances() {
+
+    aws ec2 describe-instances \
+        --filters "Name=instance-state-name,Values=pending,running,stopping,stopped,rebooting" \
+        --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,State.Name,PublicIpAddress,InstanceType,InstanceId]' \
+        --output text 2>/dev/null
+}
+
+
+# ============================================================
+# STATUS DA VM + EC2 LIGADAS NA CONTA
+#
+# Mostra, pelo NOME (nao pelo id):
+#   1. a VM do fiaplab (estado + URL do code-server);
+#   2. a lista de EC2 em execucao na conta, para o aluno ter
+#      ciencia de recursos ligados/esquecidos (ex.: Cloud9).
+#
+# Retorna 0 se encontrou a VM do fiaplab, 1 caso contrario.
 # ============================================================
 
 show_vm_status() {
 
-    local LINHAS ID STATE IP ACHOU=0
+    local LINHAS NAME STATE IP TYPE ID
+    local FIAP=0 RUNNING=0 OUTRAS=0
 
-    LINHAS=$(aws ec2 describe-instances \
-        --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
-                  "Name=instance-state-name,Values=pending,running,stopping,stopped,rebooting" \
-        --query 'Reservations[].Instances[].[InstanceId,State.Name,PublicIpAddress]' \
-        --output text 2>/dev/null)
+    LINHAS=$(ec2_account_instances)
 
-    if [ -z "$LINHAS" ]; then
-        echo "VM          : não encontrada"
-        echo "Code-server : indisponível"
-        echo "              (use a opção 7 → Refazer, ou rode init.sh)"
-        return 1
-    fi
-
-    while IFS=$'\t' read -r ID STATE IP; do
+    # ---- 1. VM do fiaplab ----
+    while IFS=$'\t' read -r NAME STATE IP TYPE ID; do
 
         [ -z "$ID" ] && continue
-        ACHOU=1
 
-        echo "VM          : $ID ($STATE)"
+        case "$NAME" in
+            $FIAPLAB_NAME_FILTER) ;;
+            *) continue ;;
+        esac
+
+        FIAP=1
+        echo "VM          : ${NAME} ($STATE)"
 
         if [ "$STATE" = "running" ] && [ -n "$IP" ] && [ "$IP" != "None" ]; then
             echo "Code-server : http://$IP:${CODE_SERVER_PORT}"
@@ -538,7 +553,108 @@ show_vm_status() {
 
     done < <(printf '%s\n' "$LINHAS")
 
-    [ "$ACHOU" = "1" ]
+    if [ "$FIAP" = "0" ]; then
+        echo "VM          : não encontrada"
+        echo "Code-server : indisponível (use a opção 4 → Refazer, ou init.sh)"
+    fi
+
+    # ---- 2. EC2 em execucao na conta ----
+    echo "----------------------------------------"
+    echo "EC2 em execução na conta:"
+
+    while IFS=$'\t' read -r NAME STATE IP TYPE ID; do
+
+        [ -z "$ID" ] && continue
+        [ "$STATE" = "running" ] || continue
+
+        RUNNING=$((RUNNING + 1))
+        echo "  - ${NAME:-$ID} ($TYPE)"
+
+        case "$NAME" in
+            $FIAPLAB_NAME_FILTER) ;;
+            *) OUTRAS=$((OUTRAS + 1)) ;;
+        esac
+
+    done < <(printf '%s\n' "$LINHAS")
+
+    if [ "$RUNNING" = "0" ]; then
+        echo "  (nenhuma)"
+    elif [ "$OUTRAS" -gt 0 ]; then
+        echo "  ⚠️ Há EC2 ligadas além da VM do lab — suspenda o que não usa."
+    fi
+
+    [ "$FIAP" = "1" ]
+}
+
+
+# ============================================================
+# INSTANCIAS DO FIAPLAB (via tag) + LIGAR/SUSPENDER
+#
+# Operam apenas na(s) VM(s) do fiaplab, com mensagens que levam
+# em conta o estado atual: nao pedem "numero da VM" e nao mandam
+# ligar/suspender o que ja esta no estado desejado.
+# ============================================================
+
+fiaplab_instances() {
+
+    aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
+                  "Name=instance-state-name,Values=pending,running,stopping,stopped,rebooting" \
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Name`]|[0].Value]' \
+        --output text 2>/dev/null
+}
+
+vm_start() {
+
+    local ID STATE NAME
+    local -a ALVO=()
+
+    while IFS=$'\t' read -r ID STATE NAME; do
+        [ -z "$ID" ] && continue
+        case "$STATE" in
+            running)  echo "✅ ${NAME:-$ID} já está ligada." ;;
+            pending)  echo "⏳ ${NAME:-$ID} já está iniciando." ;;
+            *)        ALVO+=("$ID") ;;
+        esac
+    done < <(fiaplab_instances)
+
+    if [ "${#ALVO[@]}" -eq 0 ]; then
+        echo ""
+        echo "Nada a ligar."
+        return 0
+    fi
+
+    echo ""
+    echo ">> Ligando ${#ALVO[@]} VM(s)..."
+    aws ec2 start-instances --instance-ids "${ALVO[@]}" >/dev/null 2>&1 \
+        && echo "✅ Comando enviado. Aguarde ~30s e o menu mostrará o IP." \
+        || { echo "❌ Erro ao ligar."; return 1; }
+}
+
+vm_stop() {
+
+    local ID STATE NAME
+    local -a ALVO=()
+
+    while IFS=$'\t' read -r ID STATE NAME; do
+        [ -z "$ID" ] && continue
+        case "$STATE" in
+            stopped|stopping) echo "✅ ${NAME:-$ID} já está suspensa." ;;
+            *)                ALVO+=("$ID") ;;
+        esac
+    done < <(fiaplab_instances)
+
+    if [ "${#ALVO[@]}" -eq 0 ]; then
+        echo ""
+        echo "Nada a suspender."
+        return 0
+    fi
+
+    echo ""
+    echo ">> Suspendendo ${#ALVO[@]} VM(s)..."
+    aws ec2 stop-instances --instance-ids "${ALVO[@]}" >/dev/null 2>&1 \
+        && echo "✅ Comando enviado." \
+        || { echo "❌ Erro ao suspender."; return 1; }
 }
 
 

@@ -9,10 +9,9 @@
 # recria nem lista/troca projetos. O projeto e fixo (ubuntu-vm,
 # retomado do cache ~/.fiaplab).
 #
-# Sairam do menu, para simplificar: 1) Criar, 5) Ansible,
-# 6) Mostrar IP e 8) Trocar projeto. A numeracao das opcoes
-# restantes foi mantida (2/3/4/7) para nao confundir quem ja
-# conhece o menu antigo.
+# Sairam do menu, para simplificar: Criar, Ansible, Mostrar IP e
+# Trocar projeto. As opcoes restantes foram renumeradas de 1 a 4:
+# 1) Ligar  2) Suspender  3) Conectar  4) Destruir/Refazer.
 #
 # Os comandos criar/destruir/ansible/status/ip continuam
 # instalados e genericos, para uso futuro com as demais subpastas
@@ -65,7 +64,7 @@ run_operation() {
 
 
 # ============================================================
-# DESTRUIR OU REFAZER (submenu da opcao 7)
+# DESTRUIR OU REFAZER (submenu da opcao 4)
 # ============================================================
 
 destruir_ou_refazer() {
@@ -174,16 +173,15 @@ while true; do
     echo " FIAP LAB"
     echo "========================================"
     echo "Conta AWS   : ${ACCOUNT_ID:-desconhecida}"
-    echo "Projeto     : $CURRENT_PROJECT"
     echo "----------------------------------------"
-    # Status ao vivo via AWS CLI (rapido).
+    # Status ao vivo via AWS CLI (rapido): VM do lab + EC2 ligadas.
     show_vm_status
     echo "========================================"
     echo ""
-    echo "2) Ligar VM"
-    echo "3) Suspender VM"
-    echo "4) Conectar via SSH"
-    echo "7) Destruir ou Refazer ambiente"
+    echo "1) Ligar VM"
+    echo "2) Suspender VM"
+    echo "3) Conectar via SSH"
+    echo "4) Destruir ou Refazer ambiente"
     echo "0) Sair"
     echo ""
 
@@ -191,17 +189,31 @@ while true; do
 
     case "$OPCAO" in
 
+        1)
+            # Liga so a VM do lab, ciente do estado (sem perguntar
+            # numero e sem religar o que ja esta ligado).
+            if aws_require; then
+                echo ""
+                echo "========================================"
+                echo " LIGAR VM"
+                echo "========================================"
+                vm_start
+            fi
+            pause_menu
+            ;;
+
         2)
-            run_operation "ligar.sh"
+            if aws_require; then
+                echo ""
+                echo "========================================"
+                echo " SUSPENDER VM"
+                echo "========================================"
+                vm_stop
+            fi
             pause_menu
             ;;
 
         3)
-            run_operation "suspender.sh"
-            pause_menu
-            ;;
-
-        4)
             if aws_require; then
                 echo ""
                 "$HOME/conectar.sh" "$CURRENT_PROJECT" 1
@@ -209,7 +221,7 @@ while true; do
             pause_menu
             ;;
 
-        7)
+        4)
             destruir_ou_refazer
             pause_menu
             ;;
