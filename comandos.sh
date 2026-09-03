@@ -131,7 +131,7 @@ terraform -chdir="$TF_DIR" init -reconfigure \
     -backend-config="bucket=$BUCKET_NAME" \
     -backend-config="key=$TFSTATE_KEY" \
     -backend-config="region=$AWS_REGION" \
-    -backend-config="dynamodb_table=$DYNAMO_TABLE"
+    -backend-config="use_lockfile=true"
 
 RC=$?
 
@@ -236,7 +236,7 @@ terraform -chdir="$TF_DIR" init -reconfigure \
     -backend-config="bucket=$BUCKET_NAME" \
     -backend-config="key=$TFSTATE_KEY" \
     -backend-config="region=$AWS_REGION" \
-    -backend-config="dynamodb_table=$DYNAMO_TABLE"
+    -backend-config="use_lockfile=true"
 
 RC=$?
 
