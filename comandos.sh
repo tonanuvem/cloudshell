@@ -49,6 +49,18 @@ cat > "$HOME/fiaplab.sh" <<LAUNCH
 #!/bin/bash
 # Lancador gerado por comandos.sh -- NAO edite; edite $BIN_DIR/fiaplab.sh.
 REPO="$SCRIPT_DIR"
+BIN="$BIN_DIR/fiaplab.sh"
+if [ ! -x "\$BIN" ]; then
+    echo ""
+    echo "❌ FIAP LAB não encontrado em: \$REPO"
+    echo ""
+    echo "A pasta do projeto foi movida ou removida. Para restaurar:"
+    echo ""
+    echo "   git clone https://github.com/tonanuvem/cloudshell \"\$REPO\""
+    echo "   bash \"\$REPO/init.sh\""
+    echo ""
+    exit 1
+fi
 if [ -z "\$FIAPLAB_NO_UPDATE" ] && [ -d "\$REPO/.git" ]; then
     # timeout protege contra rede lenta; se nao existir, roda direto.
     if command -v timeout >/dev/null 2>&1; then
@@ -57,7 +69,7 @@ if [ -z "\$FIAPLAB_NO_UPDATE" ] && [ -d "\$REPO/.git" ]; then
         git -C "\$REPO" pull --ff-only --quiet 2>/dev/null
     fi
 fi
-exec "$BIN_DIR/fiaplab.sh" "\$@"
+exec "\$BIN" "\$@"
 LAUNCH
 chmod +x "$HOME/fiaplab.sh"
 
@@ -69,7 +81,15 @@ chmod +x "$HOME/fiaplab.sh"
 cat > "$HOME/ip" <<LAUNCH
 #!/bin/bash
 # Lancador gerado por comandos.sh -- NAO edite; edite $BIN_DIR/ip.
-exec "$BIN_DIR/ip" "\$@"
+BIN="$BIN_DIR/ip"
+if [ ! -x "\$BIN" ]; then
+    echo ""
+    echo "❌ FIAP LAB não encontrado em: $SCRIPT_DIR"
+    echo "   Restaure com: git clone https://github.com/tonanuvem/cloudshell \"$SCRIPT_DIR\" && bash \"$SCRIPT_DIR/init.sh\""
+    echo ""
+    exit 1
+fi
+exec "\$BIN" "\$@"
 LAUNCH
 chmod +x "$HOME/ip"
 
