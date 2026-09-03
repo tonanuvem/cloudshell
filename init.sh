@@ -60,10 +60,14 @@ else
 fi
 
 # ============================================================
-# 2. GERAR SCRIPTS E BIBLIOTECA
+# 2. INSTALAR COMANDOS E BIBLIOTECA
+#
+# Copia bin/* para o $HOME. Antes os comandos eram gerados via
+# heredoc; agora sao arquivos reais em bin/ e este passo apenas
+# os instala.
 # ============================================================
 
-echo ">> Gerando scripts do FIAP LAB..."
+echo ">> Instalando comandos do FIAP LAB..."
 
 bash "$SCRIPT_DIR/comandos.sh" >/dev/null
 
@@ -71,7 +75,7 @@ RC=$?
 
 if [ "$RC" -ne 0 ]; then
     echo ""
-    echo "❌ Erro ao criar os scripts do FIAP LAB."
+    echo "❌ Erro ao instalar os comandos do FIAP LAB."
     echo ""
     exit "$RC"
 fi

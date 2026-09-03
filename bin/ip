@@ -1,0 +1,41 @@
+#!/bin/bash
+
+source "$HOME/.fiaplab.lib.sh"
+
+PROJECT="$1"
+
+if [ -z "$PROJECT" ]; then
+    echo "Uso: ~/ip <projeto>"
+    exit 1
+fi
+
+TF_DIR="$CONFIG_DIR/$PROJECT"
+
+if [ ! -d "$TF_DIR" ]; then
+    echo "❌ Projeto não encontrado: $PROJECT"
+    exit 1
+fi
+
+aws_require || exit 1
+
+tf_ensure_init "$PROJECT" || exit 1
+
+echo ""
+echo "Atualizando state..."
+echo ""
+
+terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Terraform refresh terminou com erro."
+    exit "$RC"
+fi
+
+echo ""
+echo "IPs externos:"
+echo ""
+
+tf_public_ips "$PROJECT"
