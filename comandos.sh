@@ -85,6 +85,13 @@ TF_CACHE="$TMP_APP_DIR/tf_cache"
 TF_PROJECTS="$TMP_APP_DIR/tf_projects"
 ANSIBLE_VENV="$TMP_APP_DIR/ansible_venv"
 
+# Inventarios do Ansible ficam fora do clone do repositorio config:
+# antes, cada ajustar.sh gravava um inv.hosts dentro da propria pasta
+# versionada do projeto.
+INVENTORY_DIR="$TMP_APP_DIR/inventory"
+
+INVENTORY_FILE=""
+
 TERRAFORM_VERSION="1.16.0"
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
@@ -311,7 +318,7 @@ get_account_id() {
 
 prepare_tmp_environment() {
 
-    mkdir -p "$TF_CACHE" "$TF_PROJECTS" "$ANSIBLE_VENV"
+    mkdir -p "$TF_CACHE" "$TF_PROJECTS" "$ANSIBLE_VENV" "$INVENTORY_DIR"
 
     export TF_PLUGIN_CACHE_DIR="$TF_CACHE"
 
@@ -529,6 +536,45 @@ tf_public_ips() {
         jq -r '.ip_externo.value? | if type == "string" then . else (.. | strings) end' \
         2>/dev/null
 }
+
+
+# ============================================================
+# INVENTARIO ANSIBLE
+#
+# Monta o inventario a partir dos IPs do state e grava em
+# /tmp/fiap/inventory, nunca dentro do clone do config.
+#
+# Define INVENTORY_FILE com o caminho gerado.
+# ============================================================
+
+tf_write_inventory() {
+
+    local PROJECT="$1"
+    local DEST="${2:-$INVENTORY_DIR/${PROJECT}.hosts}"
+    local IPS I
+
+    # O grep descarta linhas em branco: sem ele um output vazio
+    # geraria um host sem endereco no inventario.
+    mapfile -t IPS < <(tf_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
+
+    if [ "${#IPS[@]}" -eq 0 ]; then
+        INVENTORY_FILE=""
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$DEST")" || return 1
+
+    {
+        echo "[nodes]"
+        for I in "${!IPS[@]}"; do
+            printf 'node%s ansible_ssh_host=%s\n' "$I" "${IPS[$I]}"
+        done
+    } > "$DEST" || return 1
+
+    INVENTORY_FILE="$DEST"
+
+    return 0
+}
 LIBEOF
 
 chmod 600 "$HOME_DIR/.fiaplab.lib.sh"
@@ -655,6 +701,11 @@ if [ -f "$AJUSTAR_SCRIPT" ]; then
     echo ""
     echo "   $AJUSTAR_SCRIPT"
     echo ""
+
+    # Mantem o inventario fora do clone do repositorio config.
+    export FIAPLAB_INVENTORY="$INVENTORY_DIR/${PROJECT}.hosts"
+
+    mkdir -p "$INVENTORY_DIR"
 
     bash "$AJUSTAR_SCRIPT"
 
@@ -940,7 +991,7 @@ echo ""
 
 # Os IDs de instancia nao mudam: basta ler o state, sem a ida
 # a AWS que o "terraform refresh" (deprecado) fazia aqui.
-mapfile -t IDS < <(tf_instance_ids "$PROJECT")
+mapfile -t IDS < <(tf_instance_ids "$PROJECT" | grep -v '^[[:space:]]*$')
 
 if [ "${#IDS[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform."
@@ -1047,7 +1098,7 @@ echo ""
 
 # Os IDs de instancia nao mudam: basta ler o state, sem a ida
 # a AWS que o "terraform refresh" (deprecado) fazia aqui.
-mapfile -t IDS < <(tf_instance_ids "$PROJECT")
+mapfile -t IDS < <(tf_instance_ids "$PROJECT" | grep -v '^[[:space:]]*$')
 
 if [ "${#IDS[@]}" -eq 0 ]; then
     echo "❌ Nenhuma instância encontrada no Terraform."
@@ -1190,7 +1241,7 @@ if [ "$RC" -ne 0 ]; then
     exit "$RC"
 fi
 
-mapfile -t IPS < <(tf_public_ips "$PROJECT")
+mapfile -t IPS < <(tf_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
 
 INDEX=$((NODENUM - 1))
 IP="${IPS[$INDEX]}"
@@ -1295,6 +1346,62 @@ prepare_tmp_environment
 
 ensure_ansible || exit 1
 
+aws_require || exit 1
+
+tf_ensure_init "$PROJECT" || exit 1
+
+echo ""
+echo "========================================"
+echo " ANSIBLE"
+echo "========================================"
+echo "Projeto : $PROJECT"
+echo ""
+
+# ------------------------------------------------------------
+# 1) ajustar.sh do projeto
+#
+# E o caminho canonico de configuracao: monta o inventario com
+# os IPs reais das VMs e roda a sequencia de playbooks correta.
+# Antes, esta opcao so procurava *.yml dentro da pasta do projeto
+# -- e o ubuntu-vm nao tem nenhum, entao a opcao 5 do menu nunca
+# funcionava justamente no projeto principal.
+# ------------------------------------------------------------
+
+AJUSTAR="$TF_DIR/ajustar.sh"
+
+if [ -f "$AJUSTAR" ]; then
+
+    echo ">> Executando ajustar.sh do projeto..."
+    echo ""
+
+    export FIAPLAB_INVENTORY="$INVENTORY_DIR/${PROJECT}.hosts"
+
+    mkdir -p "$INVENTORY_DIR"
+
+    bash "$AJUSTAR"
+
+    RC=$?
+
+    echo ""
+
+    if [ "$RC" -eq 0 ]; then
+        echo "✅ Configuração concluída."
+    else
+        echo "❌ Configuração terminou com erro."
+    fi
+
+    exit "$RC"
+fi
+
+# ------------------------------------------------------------
+# 2) Playbooks proprios do projeto
+#
+# O inventario e montado a partir do state, apontando para as
+# VMs. Antes usava-se $CONFIG_DIR/hosts, que e o inventario
+# local do CloudShell: os playbooks rodariam contra o proprio
+# CloudShell, e nao contra a VM do aluno.
+# ------------------------------------------------------------
+
 PLAYBOOKS=()
 
 while IFS= read -r FILE; do
@@ -1309,8 +1416,10 @@ done < <(
 )
 
 if [ "${#PLAYBOOKS[@]}" -eq 0 ]; then
-    echo "❌ Nenhum playbook YAML encontrado em:"
+    echo "❌ O projeto '$PROJECT' não possui ajustar.sh nem playbooks."
+    echo ""
     echo "   $TF_DIR"
+    echo ""
     exit 1
 fi
 
@@ -1320,7 +1429,6 @@ if [ "${#PLAYBOOKS[@]}" -eq 1 ]; then
 
 else
 
-    echo ""
     echo "Playbooks disponíveis:"
     echo ""
 
@@ -1347,24 +1455,30 @@ else
     PLAYBOOK="${PLAYBOOKS[$INDEX]}"
 fi
 
-echo ""
-echo "========================================"
-echo " ANSIBLE"
-echo "========================================"
-echo "Projeto : $PROJECT"
-echo "Playbook: $(basename "$PLAYBOOK")"
-echo ""
-
-INVENTORY="$CONFIG_DIR/hosts"
-
-if [ ! -f "$INVENTORY" ]; then
-    echo "❌ Inventory não encontrado:"
-    echo "   $INVENTORY"
+if ! tf_write_inventory "$PROJECT"; then
+    echo "❌ Nenhuma VM encontrada no state do projeto."
+    echo ""
+    echo "Use primeiro a opção:  1) Criar infraestrutura"
+    echo ""
     exit 1
 fi
 
+KEY="$ENV_DIR/labsuser.pem"
+
+if [ ! -f "$KEY" ]; then
+    echo "❌ Chave SSH não encontrada: $KEY"
+    exit 1
+fi
+
+echo "Playbook: $(basename "$PLAYBOOK")"
+echo "Inventário:"
+cat "$INVENTORY_FILE"
+echo ""
+
 ansible-playbook \
-    -i "$INVENTORY" \
+    -i "$INVENTORY_FILE" \
+    -u ubuntu \
+    --key-file "$KEY" \
     "$PLAYBOOK"
 
 RC=$?

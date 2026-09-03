@@ -41,10 +41,22 @@ if [ ! -d "$PASTA_CONFIG/.git" ]; then
         exit 1
     }
 else
-    (
-        cd "$PASTA_CONFIG" || exit 1
-        git pull --ff-only
-    ) || echo "   ⚠️ Não foi possível atualizar o repositório; seguindo com a cópia local."
+    PULL_ERR=$(
+        cd "$PASTA_CONFIG" 2>/dev/null &&
+        git pull --ff-only 2>&1 >/dev/null
+    )
+
+    if [ -n "$PULL_ERR" ]; then
+        echo ""
+        echo "   ⚠️ Não foi possível atualizar o repositório de configuração."
+        echo ""
+        echo "   Motivo:"
+        echo "   $PULL_ERR"
+        echo ""
+        echo "   Seguindo com a cópia local. Se você editou arquivos em"
+        echo "   $PASTA_CONFIG, mova-os para fora da pasta e rode de novo."
+        echo ""
+    fi
 fi
 
 # ============================================================
@@ -225,6 +237,10 @@ fi
 # 9. INVENTORY
 # ============================================================
 
+# Inventario LOCAL do CloudShell, usado pelos scripts legados
+# (preparar.sh, codeserver.sh). O menu do fiaplab.sh nao usa este
+# arquivo: os playbooks dos projetos rodam contra as VMs, com o
+# inventario gerado em $INVENTORY_DIR.
 cat > "$CONFIG_DIR/hosts" <<HOSTS
 [nodes]
 cloudshell ansible_connection=local
