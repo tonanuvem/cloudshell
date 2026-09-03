@@ -294,7 +294,7 @@ echo ""
 df -h /tmp
 echo ""
 
-bash "$SCRIPT_DIR/bin/ip" "$PROJETO_PADRAO"
+# bash "$SCRIPT_DIR/bin/ip" "$PROJETO_PADRAO"
 
 echo ""
 echo "========================================"
