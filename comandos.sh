@@ -93,7 +93,7 @@ if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
 fi
 
 BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-DYNAMO_TABLE="terraform-locks"
+# DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
 
 echo ""
@@ -252,7 +252,7 @@ if [ -z "$ACCOUNT_ID" ] || [ "$ACCOUNT_ID" = "None" ]; then
 fi
 
 BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-DYNAMO_TABLE="terraform-locks"
+# DYNAMO_TABLE="terraform-locks"
 TFSTATE_KEY="${PROJECT}/terraform.tfstate"
 
 echo ""
