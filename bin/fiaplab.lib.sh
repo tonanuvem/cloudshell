@@ -45,6 +45,27 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8099}"
 FIAPLAB_NAME_FILTER="${FIAPLAB_NAME_FILTER:-fiaplab-*}"
 
+# Senha do code-server, exibida no destaque do menu. Espelha o default
+# do playbook ansible_code_server_ubuntu.yml (repo config); sobrescreva
+# com CODE_SERVER_PASSWORD se mudar la.
+CODE_SERVER_PASSWORD="${CODE_SERVER_PASSWORD:-fiap}"
+
+# Cores ANSI para destacar a URL do code-server no menu. So quando
+# a saida e um terminal (tty); em pipe/arquivo ficam vazias.
+if [ -t 1 ]; then
+    C_OFF=$'\033[0m'
+    C_DIM=$'\033[2m'
+    C_BOLD=$'\033[1m'
+    C_URL=$'\033[1;96m'      # ciano brilhante, negrito
+    C_BADGE=$'\033[1;42;97m' # branco negrito sobre fundo verde
+else
+    C_OFF=""
+    C_DIM=""
+    C_BOLD=""
+    C_URL=""
+    C_BADGE=""
+fi
+
 # Desliga a verificacao de host key do Ansible. Exportado no nivel
 # do modulo (nao dentro de uma funcao) para valer em qualquer script
 # que carregue a lib -- e ser herdado pelo ajustar.sh, que roda o
@@ -553,6 +574,29 @@ ec2_account_instances() {
 # Retorna 0 se encontrou a VM do fiaplab, 1 caso contrario.
 # ============================================================
 
+# ============================================================
+# codeserver_callout : destaque de acesso ao code-server
+#
+# Badge + instrucao de copiar/colar + URL em destaque + senha.
+# Usado pelo menu (show_vm_status) e pelo comando ip, para os dois
+# ficarem identicos. Recebe o IP publico da VM.
+# ============================================================
+
+codeserver_callout() {
+
+    local IP="$1"
+
+    echo ""
+    echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
+    echo "  ${C_DIM}copie e cole a URL abaixo (o clique não abre no CloudShell):${C_OFF}"
+    echo ""
+    echo "      ${C_URL}http://${IP}:${CODE_SERVER_PORT}${C_OFF}"
+    echo ""
+    echo "      senha: ${C_BOLD}${CODE_SERVER_PASSWORD}${C_OFF}"
+    echo ""
+}
+
+
 show_vm_status() {
 
     local LINHAS NAME STATE IP TYPE ID
@@ -574,11 +618,14 @@ show_vm_status() {
         echo "VM          : ${NAME} ($STATE)"
 
         if [ "$STATE" = "running" ] && [ -n "$IP" ] && [ "$IP" != "None" ]; then
-            echo "Code-server : http://$IP:${CODE_SERVER_PORT}"
+            # Destaque: o aluno precisa ABRIR esta URL no navegador.
+            # No CloudShell o clique nao abre o link, entao a URL fica
+            # sozinha numa linha, em destaque, para copiar e colar.
+            codeserver_callout "$IP"
         elif [ "$STATE" = "running" ]; then
             echo "Code-server : aguardando IP público..."
         else
-            echo "Code-server : indisponível (VM $STATE)"
+            echo "Code-server : indisponível (VM $STATE) — use a opção 1) Ligar VM"
         fi
 
     done < <(printf '%s\n' "$LINHAS")

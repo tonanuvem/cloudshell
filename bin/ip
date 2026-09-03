@@ -29,18 +29,14 @@ for region in us-east-1 us-west-2; do
     aws ec2 describe-instances \
         --region "$region" \
         --query "Reservations[*].Instances[*].[PublicIpAddress, Tags[?Key=='Name'].Value|[0]]" \
-        --output text | grep -v None
+        --output text |
+        grep -v None |
+        awk -F'\t' '{ printf "%-16s(%s)\n", $1, $2 }'
 done
 
 # ------------------------------------------------------------
 # Acesso ao code-server (VM do fiaplab, em execucao)
 # ------------------------------------------------------------
-
-echo ""
-echo "========================================"
-echo ""
-echo "Acesso ao FIAP LAB (Code Server):"
-echo ""
 
 IP=$(aws ec2 describe-instances \
     --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
@@ -49,9 +45,9 @@ IP=$(aws ec2 describe-instances \
     --output text 2>/dev/null | head -1)
 
 if [ -n "$IP" ] && [ "$IP" != "None" ]; then
-    echo "http://$IP:${CODE_SERVER_PORT}"
+    codeserver_callout "$IP"
 else
-    echo "(a VM do FIAP LAB não está em execução)"
+    echo ""
+    echo "Acesso ao FIAP LAB (Code Server): a VM não está em execução."
+    echo ""
 fi
-
-echo ""
