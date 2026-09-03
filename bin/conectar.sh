@@ -69,7 +69,7 @@ if [ -z "$IP" ] || [ "$IP" = "null" ] || [ "$IP" = "None" ]; then
     echo ""
     echo "❌ Não foi possível obter o IP da VM $NODENUM."
     echo ""
-    echo "   A VM pode estar desligada. Use a opção 2) Ligar VM"
+    echo "   A VM pode estar desligada. Ligue-a primeiro (opção Ligar)"
     echo "   e aguarde alguns segundos antes de conectar."
     echo ""
 
