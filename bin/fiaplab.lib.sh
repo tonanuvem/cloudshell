@@ -543,6 +543,37 @@ show_vm_status() {
 
 
 # ============================================================
+# IPs PUBLICOS ATUAIS (via AWS CLI, por projeto)
+#
+# Generico: usa os IDs do state do projeto (rapido, sem refresh)
+# e consulta o IP publico ao vivo de cada um, na mesma ordem das
+# instancias. Substitui o "terraform apply -refresh-only", que
+# era lento e so servia para atualizar o IP no state.
+#
+# Uma linha por instancia (na ordem); "None" quando a VM esta
+# parada e nao tem IP publico.
+# ============================================================
+
+ec2_public_ips() {
+
+    local PROJECT="$1"
+    local ID
+    local IDS
+
+    mapfile -t IDS < <(tf_instance_ids "$PROJECT" | grep -v '^[[:space:]]*$')
+
+    [ "${#IDS[@]}" -gt 0 ] || return 1
+
+    for ID in "${IDS[@]}"; do
+        aws ec2 describe-instances \
+            --instance-ids "$ID" \
+            --query 'Reservations[].Instances[].PublicIpAddress' \
+            --output text 2>/dev/null
+    done
+}
+
+
+# ============================================================
 # INVENTARIO ANSIBLE
 #
 # Monta o inventario a partir dos IPs do state e grava em
