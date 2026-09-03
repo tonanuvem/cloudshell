@@ -87,7 +87,7 @@ echo ""
 
 ssh \
     -o LogLevel=error \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$KEY" \
     ubuntu@"$IP" \
     "mkdir -p /home/ubuntu/.aws"
@@ -102,7 +102,7 @@ fi
 scp \
     -q \
     -o LogLevel=error \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$KEY" \
     "$CREDENTIALS" \
     ubuntu@"$IP":/home/ubuntu/.aws/credentials
@@ -115,20 +115,20 @@ if [ "$RC" -ne 0 ]; then
 fi
 
 if [ -f "$CRED_DIR/config" ]; then
-    scp -q -o LogLevel=error -o StrictHostKeyChecking=no -i "$KEY" \
+    scp -q -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY" \
         "$CRED_DIR/config" \
         ubuntu@"$IP":/home/ubuntu/.aws/config
 fi
 
 ssh \
     -o LogLevel=error \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$KEY" \
     ubuntu@"$IP" \
     "chmod 600 /home/ubuntu/.aws/credentials"
 
 ssh \
     -o LogLevel=error \
-    -o StrictHostKeyChecking=no \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$KEY" \
     ubuntu@"$IP"

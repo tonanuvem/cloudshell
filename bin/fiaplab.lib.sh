@@ -45,6 +45,17 @@ AWS_REGION="${AWS_REGION:-us-east-1}"
 CODE_SERVER_PORT="${CODE_SERVER_PORT:-8099}"
 FIAPLAB_NAME_FILTER="${FIAPLAB_NAME_FILTER:-fiaplab-*}"
 
+# Desliga a verificacao de host key do Ansible. Exportado no nivel
+# do modulo (nao dentro de uma funcao) para valer em qualquer script
+# que carregue a lib -- e ser herdado pelo ajustar.sh, que roda o
+# ansible-playbook mas nao carrega a lib.
+#
+# Sem isso, as VMs do lab (recriadas com frequencia, reaproveitando
+# IPs publicos) deixam chaves antigas no ~/.ssh/known_hosts e o
+# Ansible aborta com "Host key verification failed". VM de lab e
+# efemera, entao nao ha o que proteger com host key checking.
+export ANSIBLE_HOST_KEY_CHECKING=False
+
 ACCOUNT_ID=""
 BUCKET_NAME=""
 
