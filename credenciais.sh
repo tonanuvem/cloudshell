@@ -17,19 +17,25 @@ if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] && [ -n "$AWS_CONTAINER_AUTHORIZ
 
     if [ -n "$KEY_ID" ]; then
         mkdir -p ~/.aws
+        chmod 700 ~/.aws
 
-        cat > ~/.aws/credentials <<EOF
+        # umask 077: sem isso o arquivo de credenciais nascia 644.
+        (
+            umask 077
+
+            cat > ~/.aws/credentials <<EOF
 [default]
 aws_access_key_id = ${KEY_ID}
 aws_secret_access_key = ${SECRET_KEY}
 aws_session_token = ${SESSION_TOKEN}
 EOF
 
-        cat > ~/.aws/config <<EOF
+            cat > ~/.aws/config <<EOF
 [default]
 region = us-east-1
 output = json
 EOF
+        )
 
         echo "✅ Arquivo ~/.aws/credentials gerado com sucesso!"
     else

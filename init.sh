@@ -1,16 +1,24 @@
 #!/bin/bash
 
-# O init pode parar se houver erro.
-# set -e
+# ============================================================
+# FIAP LAB - INITIALIZATION
+#
+# Ordem importante: os scripts auxiliares (e a biblioteca comum
+# .fiaplab.lib.sh) sao gerados logo no inicio, porque todo o
+# resto deste script passa a usar as funcoes da lib em vez de
+# repetir a logica de credenciais / terraform / ansible.
+#
+# Nao usa "set -e": o RC e tratado explicitamente.
+# ============================================================
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
 PASTA_ENV="$HOME/environment"
 PASTA_CONFIG="$PASTA_ENV/config"
-PASTA_CRED="$PASTA_ENV/credenciais"
 
-TMP_APP_DIR="/tmp/fiap"
-ANSIBLE_VENV="$TMP_APP_DIR/ansible_venv"
+PROJETO_PADRAO="ubuntu-vm"
 
 echo ""
 echo "========================================"
@@ -26,16 +34,57 @@ echo ">> Atualizando repositório de configuração..."
 
 if [ ! -d "$PASTA_CONFIG/.git" ]; then
     rm -rf "$PASTA_CONFIG"
-    git clone https://github.com/tonanuvem/config "$PASTA_CONFIG"
+    git clone https://github.com/tonanuvem/config "$PASTA_CONFIG" || {
+        echo ""
+        echo "❌ Não foi possível clonar o repositório de configuração."
+        echo ""
+        exit 1
+    }
 else
-    (
-        cd "$PASTA_CONFIG"
-        git pull --ff-only || true
+    PULL_ERR=$(
+        cd "$PASTA_CONFIG" 2>/dev/null &&
+        git pull --ff-only 2>&1 >/dev/null
     )
+
+    if [ -n "$PULL_ERR" ]; then
+        echo ""
+        echo "   ⚠️ Não foi possível atualizar o repositório de configuração."
+        echo ""
+        echo "   Motivo:"
+        echo "   $PULL_ERR"
+        echo ""
+        echo "   Seguindo com a cópia local. Se você editou arquivos em"
+        echo "   $PASTA_CONFIG, mova-os para fora da pasta e rode de novo."
+        echo ""
+    fi
 fi
 
 # ============================================================
-# 2. SSH KEY
+# 2. INSTALAR COMANDOS E BIBLIOTECA
+#
+# Copia bin/* para o $HOME. Antes os comandos eram gerados via
+# heredoc; agora sao arquivos reais em bin/ e este passo apenas
+# os instala.
+# ============================================================
+
+echo ">> Instalando comandos do FIAP LAB..."
+
+bash "$SCRIPT_DIR/comandos.sh" >/dev/null
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Erro ao instalar os comandos do FIAP LAB."
+    echo ""
+    exit "$RC"
+fi
+
+# A partir daqui, tudo vem da lib.
+source "$HOME/.fiaplab.lib.sh"
+
+# ============================================================
+# 3. SSH KEY
 # ============================================================
 
 echo ">> Configurando chave SSH..."
@@ -49,96 +98,63 @@ elif [ -f "$HOME/labsuser.pem" ]; then
 
 else
     echo ""
-    echo "ERRO: chave labsuser.pem não encontrada."
+    echo "❌ Chave labsuser.pem não encontrada."
+    echo ""
+    echo "Baixe a chave no AWS Academy (AWS Details > Download PEM)"
+    echo "e envie para o CloudShell em: $HOME/labsuser.pem"
     echo ""
     exit 1
 fi
 
 # ============================================================
-# 3. AWS CREDENTIALS
+# 4. AWS CREDENTIALS
+#
+# aws_login prefere o provedor nativo do CloudShell, que se
+# renova sozinho, e usa o arquivo estatico apenas como fallback
+# e como insumo do scp para dentro da VM.
 # ============================================================
 
 echo ">> Configurando credenciais AWS..."
 
-if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ] && \
-   [ -n "$AWS_CONTAINER_AUTHORIZATION_TOKEN" ]; then
+aws_require || exit 1
 
-    CREDS=$(curl -s \
-        -H "Authorization: $AWS_CONTAINER_AUTHORIZATION_TOKEN" \
-        "$AWS_CONTAINER_CREDENTIALS_FULL_URI")
+# ============================================================
+# 5. FERRAMENTAS E AMBIENTE TEMPORARIO
+# ============================================================
 
-    KEY_ID=$(echo "$CREDS" | jq -r '.AccessKeyId // empty')
-    SECRET_KEY=$(echo "$CREDS" | jq -r '.SecretAccessKey // empty')
-    SESSION_TOKEN=$(echo "$CREDS" | jq -r '.Token // empty')
+echo ">> Preparando ambiente temporário (Terraform, Ansible)..."
 
-    if [ -n "$KEY_ID" ]; then
+prepare_tools || {
+    echo ""
+    echo "❌ Não foi possível preparar as ferramentas do lab."
+    echo ""
+    exit 1
+}
 
-        mkdir -p "$PASTA_CRED"
+# ============================================================
+# 6. AWS ACCOUNT
+# ============================================================
 
-        cat > "$PASTA_CRED/credentials" <<EOF
-[default]
-aws_access_key_id = ${KEY_ID}
-aws_secret_access_key = ${SECRET_KEY}
-aws_session_token = ${SESSION_TOKEN}
-EOF
-
-        cat > "$PASTA_CRED/config" <<EOF
-[default]
-region = ${AWS_REGION}
-output = json
-EOF
-
-        export AWS_SHARED_CREDENTIALS_FILE="$PASTA_CRED/credentials"
-        export AWS_CONFIG_FILE="$PASTA_CRED/config"
-    fi
+if ! get_account_id; then
+    echo ""
+    echo "❌ Não foi possível identificar a conta AWS."
+    echo ""
+    exit 1
 fi
-
-# ============================================================
-# 4. TEMPORARY ENVIRONMENT
-# ============================================================
-
-echo ">> Preparando ambiente temporário..."
-
-mkdir -p "$TMP_APP_DIR/tf_cache"
-mkdir -p "$TMP_APP_DIR/tf_projects"
-mkdir -p "$TMP_APP_DIR/ansible_venv"
-
-export TF_PLUGIN_CACHE_DIR="$TMP_APP_DIR/tf_cache"
-export PATH="$ANSIBLE_VENV/bin:$PATH"
-
-cat > "$HOME/.terraformrc" <<EOF
-plugin_cache_dir = "$TMP_APP_DIR/tf_cache"
-disable_checkpoint = true
-EOF
-
-# ============================================================
-# 5. AWS ACCOUNT
-# ============================================================
-
-ACCOUNT_ID=$(aws sts get-caller-identity \
-    --query Account \
-    --output text)
-
-BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-# DYNAMO_TABLE="terraform-locks" # nao uso mais
 
 echo ""
 echo "AWS Account : $ACCOUNT_ID"
 echo "AWS Region  : $AWS_REGION"
 echo "S3 Bucket   : $BUCKET_NAME"
-# Histórico:
-# echo "DynamoDB    : $DYNAMO_TABLE"
 echo ""
 
 # ============================================================
-# 6. S3 BUCKET
+# 7. S3 BUCKET
 # ============================================================
 
 echo ">> Verificando bucket S3..."
 
-if aws s3api head-bucket \
-    --bucket "$BUCKET_NAME" \
-    >/dev/null 2>&1; then
+if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
 
     echo "   Bucket já existe."
 
@@ -161,10 +177,20 @@ else
             LocationConstraint="$AWS_REGION"
 
     fi
+
+    RC=$?
+
+    if [ "$RC" -ne 0 ]; then
+        echo ""
+        echo "❌ Não foi possível criar o bucket de state:"
+        echo "   $BUCKET_NAME"
+        echo ""
+        exit "$RC"
+    fi
 fi
 
 # ============================================================
-# 7. DYNAMODB LOCK - DESCONTINUADO
+# 8. DYNAMODB LOCK - DESCONTINUADO
 # ============================================================
 
 # Histórico:
@@ -212,116 +238,20 @@ fi
 # fi
 
 # ============================================================
-# 8. MAP TERRAFORM PROJECTS
+# 9. INVENTORY
 # ============================================================
 
-echo ">> Preparando diretórios Terraform..."
-
-if [ -d "$PASTA_CONFIG" ]; then
-
-    find "$PASTA_CONFIG" \
-        -mindepth 1 \
-        -maxdepth 1 \
-        -type d \
-        -print0 |
-    while IFS= read -r -d '' SUBDIR; do
-
-        # Só considera diretório que possui arquivos .tf
-        if ! find "$SUBDIR" \
-            -maxdepth 1 \
-            -type f \
-            -name "*.tf" |
-            grep -q .; then
-            continue
-        fi
-
-        FOLDER_NAME=$(basename "$SUBDIR")
-        TMP_TF_DATA="$TMP_APP_DIR/tf_projects/$FOLDER_NAME"
-
-        mkdir -p "$TMP_TF_DATA"
-
-        if [ -d "$SUBDIR/.terraform" ] && \
-           [ ! -L "$SUBDIR/.terraform" ]; then
-
-            rm -rf "$SUBDIR/.terraform"
-        fi
-
-        if [ ! -L "$SUBDIR/.terraform" ]; then
-            ln -s "$TMP_TF_DATA" "$SUBDIR/.terraform"
-        fi
-
-    done
-fi
-
-# ============================================================
-# 9. TERRAFORM
-# ============================================================
-
-echo ">> Verificando Terraform..."
-
-if command -v terraform >/dev/null 2>&1; then
-
-    echo "   Terraform já instalado:"
-    terraform version | head -1
-
-else
-
-    echo "   Instalando Terraform 1.16.0..."
-
-    cd /tmp
-
-    rm -f terraform_1.16.0_linux_amd64.zip terraform
-
-    curl -fsSL \
-        -o terraform_1.16.0_linux_amd64.zip \
-        https://releases.hashicorp.com/terraform/1.16.0/terraform_1.16.0_linux_amd64.zip
-
-    unzip -o terraform_1.16.0_linux_amd64.zip
-
-    sudo install terraform /usr/local/bin/terraform
-
-    rm -f terraform terraform_1.16.0_linux_amd64.zip
-fi
-
-# ============================================================
-# 10. ANSIBLE
-# ============================================================
-
-echo ">> Verificando Ansible..."
-
-export ANSIBLE_PYTHON_INTERPRETER=auto_silent
-export ANSIBLE_DEPRECATION_WARNINGS=false
-export ANSIBLE_DISPLAY_SKIPPED_HOSTS=false
-
-if [ -x "$ANSIBLE_VENV/bin/ansible" ] && \
-   [ -x "$ANSIBLE_VENV/bin/ansible-playbook" ]; then
-
-    echo "   Ansible já instalado."
-
-else
-
-    echo "   Criando ambiente virtual do Ansible..."
-
-    rm -rf "$ANSIBLE_VENV"
-
-    python3 -m venv "$ANSIBLE_VENV"
-
-    "$ANSIBLE_VENV/bin/pip" install \
-        --no-cache-dir \
-        ansible
-fi
-
-# ============================================================
-# 11. INVENTORY
-# ============================================================
-
-cat > "$PASTA_CONFIG/hosts" <<EOF
+# Inventario LOCAL do CloudShell, usado pelos scripts legados
+# (preparar.sh, codeserver.sh). O menu do fiaplab.sh nao usa este
+# arquivo: os playbooks dos projetos rodam contra as VMs, com o
+# inventario gerado em $INVENTORY_DIR.
+cat > "$CONFIG_DIR/hosts" <<HOSTS
 [nodes]
 cloudshell ansible_connection=local
-EOF
+HOSTS
 
 # ============================================================
-# 12. GENERATE COMMANDS
+# 10. CRIAR A VM
 # ============================================================
 
 echo ""
@@ -330,30 +260,25 @@ echo "    CRIANDO FIAP LAB : MAQUINA VIRTUAL"
 echo "========================================"
 echo ""
 
-bash "$HOME/cloudshell/comandos.sh"
+bash "$HOME/criar.sh" "$PROJETO_PADRAO"
 
 RC=$?
 
 if [ "$RC" -ne 0 ]; then
     echo ""
-    echo "❌ Erro ao criar os scripts do FIAP LAB."
+    echo "❌ Erro ao criar/configurar a infraestrutura $PROJETO_PADRAO."
+    echo ""
+    echo "Você pode tentar novamente com:"
+    echo ""
+    echo "   ~/fiaplab.sh   ->  1) Criar infraestrutura"
     echo ""
     exit "$RC"
 fi
 
-bash "$HOME/criar.sh" ubuntu-vm
-
-RC=$?
-
-if [ "$RC" -ne 0 ]; then
-    echo ""
-    echo "❌ Erro ao criar/configurar a infraestrutura ubuntu-vm."
-    echo ""
-    exit "$RC"
-fi
+cfg_set LAST_PROJECT "$PROJETO_PADRAO"
 
 # ============================================================
-# 13. STATUS
+# 11. STATUS
 # ============================================================
 
 echo ""
@@ -367,7 +292,7 @@ echo ""
 df -h /tmp
 echo ""
 
-bash "$HOME/ip" ubuntu-vm
+bash "$HOME/ip" "$PROJETO_PADRAO"
 
 echo ""
 echo "========================================"

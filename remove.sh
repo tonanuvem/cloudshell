@@ -1,133 +1,185 @@
 #!/bin/bash
 
-# Encerra se houver erro crítico
-set -e
+# ============================================================
+# FIAP LAB - DESTRUIR E LIMPAR AMBIENTE
+#
+# Destroi a infraestrutura de TODOS os projetos com Terraform,
+# remove o bucket de state e limpa os arquivos locais.
+#
+# Nao usa "set -e": uma falha ao destruir um projeto nao deve
+# impedir a limpeza dos demais.
+#
+# A tabela DynamoDB foi descontinuada (o lock passou a
+# use_lockfile=true no backend S3), entao este script nao
+# cria, verifica nem remove DynamoDB.
+# ============================================================
 
-AWS_REGION="${AWS_REGION:-us-east-1}"
-PASTA_ENV="$HOME/environment"
-PASTA_CONFIG="$PASTA_ENV/config"
-PASTA_CRED="$PASTA_ENV/credenciais"
-TMP_APP_DIR="/tmp/fiap"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-export PATH="$TMP_APP_DIR/ansible_venv/bin:$PATH"
-export TF_PLUGIN_CACHE_DIR="$TMP_APP_DIR/tf_cache"
+# Usa a biblioteca comum para credenciais, account id e /tmp.
+if [ -f "$SCRIPT_DIR/bin/fiaplab.lib.sh" ]; then
+    source "$SCRIPT_DIR/bin/fiaplab.lib.sh"
+elif [ -f "$HOME/.fiaplab.lib.sh" ]; then
+    source "$HOME/.fiaplab.lib.sh"
+else
+    echo "❌ Biblioteca fiaplab.lib.sh não encontrada."
+    exit 1
+fi
 
 echo "============================================================"
-echo "    ⚠️  ATENÇÃO: DESTRUIÇÃO E LIMPEZA DE AMBIENTE AWS"
+echo "    ⚠️  DESTRUIÇÃO E LIMPEZA DO AMBIENTE AWS"
 echo "============================================================"
 echo ""
 echo "Este script irá:"
-echo "  1. Executar 'terraform destroy' em TODAS as subpastas com .tf"
-echo "  2. Apagar o Bucket S3 (State) e Tabela DynamoDB (Locks)"
-echo "  3. Desfazer os links simbólicos e limpar o /tmp"
-echo "  4. Remover arquivos de credenciais e caches locais"
+echo "  1. Executar 'terraform destroy' em TODOS os projetos com .tf"
+echo "  2. Remover o bucket S3 de state"
+echo "  3. Limpar credenciais, caches, links e comandos locais"
 echo ""
 
-read -p "Tem certeza que deseja DESTRUIR toda a infraestrutura? (s/N): " CONFIRM
+read -rp "Tem certeza que deseja DESTRUIR toda a infraestrutura? (s/N): " CONFIRM
+
 if [[ ! "$CONFIRM" =~ ^[Ss]$ ]]; then
     echo "❌ Operação cancelada pelo usuário."
     exit 0
 fi
 
-echo ""
-echo "============================================================"
-echo " 1. EXECUTANDO TERRAFORM DESTROY NAS SUBPASTAS"
-echo "============================================================"
-echo ""
+# ------------------------------------------------------------
+# Credenciais e conta
+# ------------------------------------------------------------
 
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)
-BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-
-if [ -d "$PASTA_CONFIG" ]; then
-    find "$PASTA_CONFIG" -mindepth 1 -maxdepth 2 -type f -name "*.tf" -exec dirname {} \; | sort -u | while read -r SUBDIR; do
-        FOLDER_NAME=$(basename "$SUBDIR")
-        echo "------------------------------------------------------------"
-        echo "🔍 Verificando módulo: $FOLDER_NAME"
-        echo "------------------------------------------------------------"
-
-        cd "$SUBDIR"
-
-        # Tenta inicializar o Terraform de forma silenciosa para ler o backend no S3
-        if command -v terraform >/dev/null 2>&1; then
-            if terraform init -backend-config="bucket=${BUCKET_NAME}" -input=false >/dev/null 2>&1; then
-                echo "🔥 Executando 'terraform destroy' em $FOLDER_NAME..."
-                terraform destroy -auto-approve -backend-config="bucket=${BUCKET_NAME}" || {
-                    echo "⚠️ Aviso: Falha ou nada para destruir em $FOLDER_NAME. Prosseguindo..."
-                }
-            else
-                echo "ℹ️  Módulo $FOLDER_NAME não inicializado ou sem estado ativo. Pulando..."
-            fi
-        else
-            echo "⚠️  Terraform não encontrado. Pulando execução do destroy."
-        fi
-        
-        cd ~
-        echo ""
-    done
-fi
-
-echo "============================================================"
-echo " 2. REMOVENDO RECURSOS DE BACKEND DA AWS (S3 + DYNAMODB)"
-echo "============================================================"
-echo ""
-
-if [ -n "$ACCOUNT_ID" ]; then
-    DYNAMO_TABLE="terraform-locks"
-
-    # --- A. DESTRUIR BUCKET S3 ---
-    if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
-        echo "🔥 Bucket S3 '$BUCKET_NAME' encontrado. Esvaziando e removendo..."
-        aws s3 rb "s3://$BUCKET_NAME" --force
-        echo "✅ Bucket S3 removido com sucesso!"
-    else
-        echo "✅ Bucket S3 '$BUCKET_NAME' não existe ou já foi removido."
-    fi
-
+aws_require || {
     echo ""
+    echo "⚠️ Sem credenciais válidas: a infraestrutura na AWS não"
+    echo "   pode ser destruída agora. Seguindo apenas com a limpeza"
+    echo "   dos arquivos locais."
+    echo ""
+    SEM_AWS=1
+}
 
-    # --- B. DESTRUIR TABELA DYNAMODB ---
-    if aws dynamodb describe-table --table-name "$DYNAMO_TABLE" --region "$AWS_REGION" >/dev/null 2>&1; then
-        echo "🔥 Tabela DynamoDB '$DYNAMO_TABLE' encontrada. Excluindo..."
-        aws dynamodb delete-table --table-name "$DYNAMO_TABLE" --region "$AWS_REGION" >/dev/null
-
-        echo "⏳ Aguardando confirmação de exclusão do DynamoDB..."
-        aws dynamodb wait table-not-exists --table-name "$DYNAMO_TABLE" --region "$AWS_REGION"
-        echo "✅ Tabela DynamoDB removida com sucesso!"
-    else
-        echo "✅ Tabela DynamoDB '$DYNAMO_TABLE' não existe ou já foi removida."
-    fi
+if [ -z "$SEM_AWS" ]; then
+    get_account_id || SEM_AWS=1
 fi
 
+prepare_tmp_environment
+
+# ============================================================
+# 1. TERRAFORM DESTROY EM TODOS OS PROJETOS
+# ============================================================
+
 echo ""
 echo "============================================================"
-echo " 3. DESFAZENDO LINKS SIMBÓLICOS DAS SUBPASTAS"
+echo " 1. DESTRUINDO INFRAESTRUTURA"
+echo "============================================================"
+
+if [ -z "$SEM_AWS" ] && command -v terraform >/dev/null 2>&1 && [ -d "$CONFIG_DIR" ]; then
+
+    for SUBDIR in "$CONFIG_DIR"/*; do
+
+        [ -d "$SUBDIR" ] || continue
+
+        find "$SUBDIR" -maxdepth 1 -type f -name "*.tf" |
+            grep -q . || continue
+
+        PROJECT=$(basename "$SUBDIR")
+
+        echo ""
+        echo "------------------------------------------------------------"
+        echo " Projeto: $PROJECT"
+        echo "------------------------------------------------------------"
+
+        # Garante backend S3 para conseguir ler o state remoto.
+        if ! grep -Rqs 'backend[[:space:]]*"s3"' "$SUBDIR"/*.tf 2>/dev/null; then
+            cat > "$SUBDIR/backend.tf" <<EOF
+terraform {
+  backend "s3" {}
+}
+EOF
+        fi
+
+        if tf_init "$PROJECT" >/dev/null 2>&1; then
+
+            echo "🔥 terraform destroy..."
+            terraform -chdir="$SUBDIR" destroy -auto-approve ||
+                echo "⚠️ Falha ou nada a destruir em $PROJECT. Prosseguindo..."
+
+        else
+            echo "ℹ️ Sem state ativo em $PROJECT. Pulando."
+        fi
+
+    done
+
+else
+    echo ""
+    echo "ℹ️ Etapa de destroy ignorada (sem AWS ou sem Terraform)."
+fi
+
+# ============================================================
+# 2. REMOVER BUCKET S3 DE STATE
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " 2. REMOVENDO BUCKET S3 DE STATE"
 echo "============================================================"
 echo ""
 
-if [ -d "$PASTA_CONFIG" ]; then
-    find "$PASTA_CONFIG" -mindepth 1 -maxdepth 2 -type f -name "*.tf" -exec dirname {} \; | sort -u | while read -r SUBDIR; do
-        FOLDER_NAME=$(basename "$SUBDIR")
-        
-        if [ -L "$SUBDIR/.terraform" ]; then
-            rm -f "$SUBDIR/.terraform"
-            echo "🗑️ Link simbólico removido: $FOLDER_NAME/.terraform"
-        fi
+if [ -z "$SEM_AWS" ] && [ -n "$BUCKET_NAME" ]; then
+
+    if aws s3api head-bucket --bucket "$BUCKET_NAME" 2>/dev/null; then
+        echo "🔥 Removendo s3://$BUCKET_NAME ..."
+        aws s3 rb "s3://$BUCKET_NAME" --force &&
+            echo "✅ Bucket removido." ||
+            echo "⚠️ Não foi possível remover o bucket."
+    else
+        echo "✅ Bucket '$BUCKET_NAME' não existe ou já foi removido."
+    fi
+
+else
+    echo "ℹ️ Remoção do bucket ignorada (sem AWS)."
+fi
+
+# ============================================================
+# 3. LIMPAR ARQUIVOS LOCAIS
+# ============================================================
+
+echo ""
+echo "============================================================"
+echo " 3. LIMPANDO ARQUIVOS LOCAIS"
+echo "============================================================"
+echo ""
+
+# Links .terraform (apontam para o /tmp).
+if [ -d "$CONFIG_DIR" ]; then
+    for SUBDIR in "$CONFIG_DIR"/*; do
+        [ -L "$SUBDIR/.terraform" ] && rm -f "$SUBDIR/.terraform"
+        rm -f "$SUBDIR/backend.tf"
     done
 fi
 
-echo ""
-echo "============================================================"
-echo " 4. LIMPANDO ARQUIVOS LOCAIS, CACHES E FERRAMENTAS"
-echo "============================================================"
-echo ""
+# Diretorio temporario.
+[ -d "$TMP_APP_DIR" ] && rm -rf "$TMP_APP_DIR" &&
+    echo "🗑️ $TMP_APP_DIR removido."
 
-[ -d "$TMP_APP_DIR" ] && rm -rf "$TMP_APP_DIR" && echo "🗑️ Diretório temporário $TMP_APP_DIR limpo."
-[ -f "/usr/local/bin/terraform" ] && sudo rm -f /usr/local/bin/terraform && echo "🗑️ Binário do Terraform removido."
-[ -d "$PASTA_CRED" ] && rm -rf "$PASTA_CRED" && echo "🗑️ Pasta de credenciais $PASTA_CRED removida."
-[ -f "$PASTA_CONFIG/hosts" ] && rm -f "$PASTA_CONFIG/hosts" && echo "🗑️ Arquivo hosts removido."
-[ -f "$HOME/.terraformrc" ] && rm -f "$HOME/.terraformrc" && echo "🗑️ Arquivo ~/.terraformrc removido."
+# Binario do Terraform (precisa de sudo).
+if [ -f "/usr/local/bin/terraform" ]; then
+    sudo rm -f /usr/local/bin/terraform &&
+        echo "🗑️ Terraform removido."
+fi
+
+# Credenciais, inventario local e configs.
+[ -d "$CRED_DIR" ] && rm -rf "$CRED_DIR" && echo "🗑️ $CRED_DIR removido."
+[ -f "$CONFIG_DIR/hosts" ] && rm -f "$CONFIG_DIR/hosts" && echo "🗑️ hosts removido."
+[ -f "$HOME/.terraformrc" ] && rm -f "$HOME/.terraformrc" && echo "🗑️ ~/.terraformrc removido."
+[ -f "$HOME/.fiaplab" ] && rm -f "$HOME/.fiaplab" && echo "🗑️ ~/.fiaplab removido."
+
+# Comandos instalados no $HOME.
+for CMD in fiaplab.sh criar.sh destruir.sh status.sh ligar.sh \
+           suspender.sh conectar.sh ansible.sh ip .fiaplab.lib.sh; do
+    [ -f "$HOME/$CMD" ] && rm -f "$HOME/$CMD"
+done
+echo "🗑️ Comandos do FIAP LAB removidos do \$HOME."
 
 echo ""
 echo "============================================================"
-echo "✨ INFRAESTRUTURA E AMBIENTE LIMPOS COM SUCESSO!"
+echo "✨ AMBIENTE LIMPO."
 echo "============================================================"
