@@ -36,12 +36,6 @@ done
 # Acesso ao code-server (VM do fiaplab, em execucao)
 # ------------------------------------------------------------
 
-echo ""
-echo "========================================"
-echo ""
-echo "Acesso ao FIAP LAB (Code Server):"
-echo ""
-
 IP=$(aws ec2 describe-instances \
     --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
               "Name=instance-state-name,Values=running" \
@@ -49,9 +43,9 @@ IP=$(aws ec2 describe-instances \
     --output text 2>/dev/null | head -1)
 
 if [ -n "$IP" ] && [ "$IP" != "None" ]; then
-    echo "http://$IP:${CODE_SERVER_PORT}"
+    codeserver_callout "$IP"
 else
-    echo "(a VM do FIAP LAB não está em execução)"
+    echo ""
+    echo "Acesso ao FIAP LAB (Code Server): a VM não está em execução."
+    echo ""
 fi
-
-echo ""

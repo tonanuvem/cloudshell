@@ -574,6 +574,29 @@ ec2_account_instances() {
 # Retorna 0 se encontrou a VM do fiaplab, 1 caso contrario.
 # ============================================================
 
+# ============================================================
+# codeserver_callout : destaque de acesso ao code-server
+#
+# Badge + instrucao de copiar/colar + URL em destaque + senha.
+# Usado pelo menu (show_vm_status) e pelo comando ip, para os dois
+# ficarem identicos. Recebe o IP publico da VM.
+# ============================================================
+
+codeserver_callout() {
+
+    local IP="$1"
+
+    echo ""
+    echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
+    echo "  ${C_DIM}copie e cole a URL abaixo (o clique não abre no CloudShell):${C_OFF}"
+    echo ""
+    echo "      ${C_URL}http://${IP}:${CODE_SERVER_PORT}${C_OFF}"
+    echo ""
+    echo "      senha: ${C_BOLD}${CODE_SERVER_PASSWORD}${C_OFF}"
+    echo ""
+}
+
+
 show_vm_status() {
 
     local LINHAS NAME STATE IP TYPE ID
@@ -598,14 +621,7 @@ show_vm_status() {
             # Destaque: o aluno precisa ABRIR esta URL no navegador.
             # No CloudShell o clique nao abre o link, entao a URL fica
             # sozinha numa linha, em destaque, para copiar e colar.
-            echo ""
-            echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
-            echo "  ${C_DIM}copie e cole a URL abaixo (o clique não abre no CloudShell):${C_OFF}"
-            echo ""
-            echo "      ${C_URL}http://$IP:${CODE_SERVER_PORT}${C_OFF}"
-            echo ""
-            echo "      senha: ${C_BOLD}${CODE_SERVER_PASSWORD}${C_OFF}"
-            echo ""
+            codeserver_callout "$IP"
         elif [ "$STATE" = "running" ]; then
             echo "Code-server : aguardando IP público..."
         else
