@@ -587,7 +587,7 @@ codeserver_callout() {
     local IP="$1"
 
     echo ""
-    echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
+    echo "  ${C_DIM} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
     echo "  ${C_DIM}copie e cole a URL abaixo (o clique não abre no CloudShell):${C_OFF}"
     echo ""
     echo "      ${C_URL}http://${IP}:${CODE_SERVER_PORT}${C_OFF}"
