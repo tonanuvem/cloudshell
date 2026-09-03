@@ -120,7 +120,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity \
     --output text)
 
 BUCKET_NAME="tfstate-cloudshell-${ACCOUNT_ID}"
-DYNAMO_TABLE="terraform-locks"
+# DYNAMO_TABLE="terraform-locks" # nao uso mais
 
 echo ""
 echo "AWS Account : $ACCOUNT_ID"
@@ -332,7 +332,25 @@ echo ""
 
 bash "$HOME/cloudshell/comandos.sh"
 
-bash "$HOME/criar.sh ubuntu-vm"
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Erro ao criar os scripts do FIAP LAB."
+    echo ""
+    exit "$RC"
+fi
+
+bash "$HOME/criar.sh" ubuntu-vm
+
+RC=$?
+
+if [ "$RC" -ne 0 ]; then
+    echo ""
+    echo "❌ Erro ao criar/configurar a infraestrutura ubuntu-vm."
+    echo ""
+    exit "$RC"
+fi
 
 # ============================================================
 # 13. STATUS
@@ -348,7 +366,8 @@ df -h "$HOME"
 echo ""
 df -h /tmp
 echo ""
-bash "$HOME/ip"
+
+bash "$HOME/ip" ubuntu-vm
 
 echo ""
 echo "========================================"
