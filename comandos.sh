@@ -155,13 +155,56 @@ RC=$?
 
 echo ""
 
-if [ "$RC" -eq 0 ]; then
-    echo "✅ Infraestrutura criada/atualizada."
-else
+if [ "$RC" -ne 0 ]; then
     echo "❌ Terraform terminou com erro."
+    echo ""
+    exit "$RC"
 fi
 
-exit "$RC"
+echo "✅ Infraestrutura criada/atualizada."
+echo ""
+
+# ------------------------------------------------------------
+# Configuração Ansible
+# ------------------------------------------------------------
+
+AJUSTAR_SCRIPT="$TF_DIR/ajustar.sh"
+
+echo "========================================"
+echo " CONFIGURAÇÃO ANSIBLE"
+echo "========================================"
+echo ""
+
+if [ -f "$AJUSTAR_SCRIPT" ]; then
+
+    echo ">> Executando ajustar.sh..."
+    echo ""
+    echo "   $AJUSTAR_SCRIPT"
+    echo ""
+
+    bash "$AJUSTAR_SCRIPT"
+
+    RC=$?
+
+    if [ "$RC" -ne 0 ]; then
+        echo ""
+        echo "❌ Configuração Ansible terminou com erro."
+        echo ""
+        exit "$RC"
+    fi
+
+    echo ""
+    echo "✅ Configuração Ansible concluída."
+
+else
+
+    echo "ℹ️ Nenhum ajustar.sh encontrado."
+    echo ""
+    echo "   O projeto não possui configuração Ansible automática."
+    echo ""
+
+fi
+
 EOF
 
 chmod +x "$HOME_DIR/criar.sh"
