@@ -19,28 +19,34 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$SCRIPT_DIR/bin"
 
-if [ ! -x "$BIN_DIR/fiaplab.sh" ]; then
-    echo "❌ Menu não encontrado: $BIN_DIR/fiaplab.sh"
-    exit 1
-fi
+# Lancadores instalados no $HOME (apontam para bin/, com o caminho
+# do repo embutido). Regerados a cada init, entao acompanham o local
+# do repositorio se ele mudar.
+LANCADORES=(fiaplab.sh ip)
 
-LAUNCHER="$HOME/fiaplab.sh"
+for NOME in "${LANCADORES[@]}"; do
 
-# Lancador com o caminho do repo embutido. Regerado a cada init,
-# entao acompanha o local do repositorio se ele mudar.
-cat > "$LAUNCHER" <<LAUNCH
+    if [ ! -x "$BIN_DIR/$NOME" ]; then
+        echo "❌ Comando não encontrado: $BIN_DIR/$NOME"
+        exit 1
+    fi
+
+    cat > "$HOME/$NOME" <<LAUNCH
 #!/bin/bash
-# Lancador gerado por comandos.sh -- executa o menu a partir do
-# repositorio. NAO edite: edite $BIN_DIR/fiaplab.sh.
-exec "$BIN_DIR/fiaplab.sh" "\$@"
+# Lancador gerado por comandos.sh -- executa a partir do repositorio.
+# NAO edite: edite $BIN_DIR/$NOME.
+exec "$BIN_DIR/$NOME" "\$@"
 LAUNCH
 
-chmod +x "$LAUNCHER"
+    chmod +x "$HOME/$NOME"
+
+done
 
 echo ""
 echo "========================================"
-echo " LANÇADOR INSTALADO"
+echo " LANÇADORES INSTALADOS"
 echo "========================================"
 echo ""
-echo "Execute:  ~/fiaplab.sh"
+echo "Menu:  ~/fiaplab.sh"
+echo "IPs:   ~/ip"
 echo ""
