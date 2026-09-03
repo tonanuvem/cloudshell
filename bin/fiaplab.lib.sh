@@ -40,6 +40,11 @@ TERRAFORM_VERSION="1.16.0"
 
 AWS_REGION="${AWS_REGION:-us-east-1}"
 
+# Code-server (VM do fiaplab): porta e filtro da tag Name usados
+# para o status rapido via AWS CLI no menu.
+CODE_SERVER_PORT="${CODE_SERVER_PORT:-8099}"
+FIAPLAB_NAME_FILTER="${FIAPLAB_NAME_FILTER:-fiaplab-*}"
+
 ACCOUNT_ID=""
 BUCKET_NAME=""
 
@@ -466,8 +471,13 @@ tf_instance_ids() {
     local PROJECT="$1"
     local TF_DIR="$CONFIG_DIR/$PROJECT"
 
+    # "terraform show -json" usa o formato de state representation:
+    # cada recurso e {type, name, values:{id,...}}. O caminho antigo
+    # .instances[].attributes.id e do arquivo de state cru e nao casa
+    # com essa saida -- por isso ligar/suspender viam "nenhuma
+    # instancia" mesmo com a VM existindo.
     terraform -chdir="$TF_DIR" show -json 2>/dev/null |
-        jq -r '.. | objects | select(.type? == "aws_instance") | .instances[]? | .attributes.id? // empty' \
+        jq -r '.. | objects | select(.type? == "aws_instance") | .values?.id? // empty' \
         2>/dev/null
 }
 
@@ -479,6 +489,87 @@ tf_public_ips() {
     terraform -chdir="$TF_DIR" output -json 2>/dev/null |
         jq -r '.ip_externo.value? | if type == "string" then . else (.. | strings) end' \
         2>/dev/null
+}
+
+
+# ============================================================
+# STATUS DA VM VIA AWS CLI
+#
+# Rapido (~1s) e independente do Terraform e do /tmp: consulta a
+# AWS direto pela tag Name, em vez do "terraform refresh" que
+# levava dezenas de segundos. Alem disso traz o IP publico ATUAL
+# -- que muda a cada stop/start e ficava desatualizado no state.
+#
+# Imprime o estado da VM e a URL do code-server. Retorna 0 se
+# encontrou alguma instancia, 1 caso contrario.
+# ============================================================
+
+show_vm_status() {
+
+    local LINHAS ID STATE IP ACHOU=0
+
+    LINHAS=$(aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
+                  "Name=instance-state-name,Values=pending,running,stopping,stopped,rebooting" \
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,PublicIpAddress]' \
+        --output text 2>/dev/null)
+
+    if [ -z "$LINHAS" ]; then
+        echo "VM          : não encontrada"
+        echo "Code-server : indisponível"
+        echo "              (use a opção 7 → Refazer, ou rode init.sh)"
+        return 1
+    fi
+
+    while IFS=$'\t' read -r ID STATE IP; do
+
+        [ -z "$ID" ] && continue
+        ACHOU=1
+
+        echo "VM          : $ID ($STATE)"
+
+        if [ "$STATE" = "running" ] && [ -n "$IP" ] && [ "$IP" != "None" ]; then
+            echo "Code-server : http://$IP:${CODE_SERVER_PORT}"
+        elif [ "$STATE" = "running" ]; then
+            echo "Code-server : aguardando IP público..."
+        else
+            echo "Code-server : indisponível (VM $STATE)"
+        fi
+
+    done < <(printf '%s\n' "$LINHAS")
+
+    [ "$ACHOU" = "1" ]
+}
+
+
+# ============================================================
+# IPs PUBLICOS ATUAIS (via AWS CLI, por projeto)
+#
+# Generico: usa os IDs do state do projeto (rapido, sem refresh)
+# e consulta o IP publico ao vivo de cada um, na mesma ordem das
+# instancias. Substitui o "terraform apply -refresh-only", que
+# era lento e so servia para atualizar o IP no state.
+#
+# Uma linha por instancia (na ordem); "None" quando a VM esta
+# parada e nao tem IP publico.
+# ============================================================
+
+ec2_public_ips() {
+
+    local PROJECT="$1"
+    local ID
+    local IDS
+
+    mapfile -t IDS < <(tf_instance_ids "$PROJECT" | grep -v '^[[:space:]]*$')
+
+    [ "${#IDS[@]}" -gt 0 ] || return 1
+
+    for ID in "${IDS[@]}"; do
+        aws ec2 describe-instances \
+            --instance-ids "$ID" \
+            --query 'Reservations[].Instances[].PublicIpAddress' \
+            --output text 2>/dev/null
+    done
 }
 
 

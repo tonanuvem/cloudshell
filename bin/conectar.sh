@@ -51,28 +51,22 @@ fi
 echo ""
 echo "Conectando ao projeto: $PROJECT"
 echo ""
-echo "Atualizando IP..."
-echo ""
 
-terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false
-
-RC=$?
-
-if [ "$RC" -ne 0 ]; then
-    echo ""
-    echo "❌ Terraform refresh terminou com erro."
-    exit "$RC"
-fi
-
-mapfile -t IPS < <(tf_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
+# IP publico ATUAL via AWS CLI (rapido). Antes usava-se
+# "terraform apply -refresh-only", que levava dezenas de segundos
+# so para atualizar o IP no state -- IP que muda a cada stop/start.
+mapfile -t IPS < <(ec2_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
 
 INDEX=$((NODENUM - 1))
 IP="${IPS[$INDEX]}"
 
-if [ -z "$IP" ] || [ "$IP" = "null" ]; then
+if [ -z "$IP" ] || [ "$IP" = "null" ] || [ "$IP" = "None" ]; then
 
     echo ""
     echo "❌ Não foi possível obter o IP da VM $NODENUM."
+    echo ""
+    echo "   A VM pode estar desligada. Use a opção 2) Ligar VM"
+    echo "   e aguarde alguns segundos antes de conectar."
     echo ""
 
     if [ "${#IPS[@]}" -gt 0 ]; then
