@@ -40,6 +40,10 @@ if [ ! -f "$KEY" ]; then
     exit 1
 fi
 
+# Garante Terraform instalado, para o script funcionar rodado direto
+# -- e nao so pelo menu.
+prepare_tools_tf || exit 1
+
 # Regenera o arquivo de credenciais imediatamente antes do scp,
 # para a VM nao receber um token ja vencido.
 aws_require || exit 1

@@ -22,6 +22,10 @@ if [ ! -d "$TF_DIR" ]; then
 fi
 
 # Credencial renovada agora, nao no boot do init.sh.
+# Garante Terraform instalado, para o script funcionar rodado
+# direto -- e nao so pelo menu.
+prepare_tools_tf || exit 1
+
 aws_require || exit 1
 
 if ! get_account_id; then

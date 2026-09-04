@@ -20,6 +20,10 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
+# Garante Terraform instalado, para o script funcionar rodado
+# direto -- e nao so pelo menu.
+prepare_tools_tf || exit 1
+
 aws_require || exit 1
 
 tf_ensure_init "$PROJECT" || exit 1
