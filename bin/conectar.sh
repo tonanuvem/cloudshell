@@ -89,50 +89,41 @@ echo ""
 echo "Conectando... IP = $IP"
 echo ""
 
-ssh \
-    -o LogLevel=error \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$KEY" \
-    ubuntu@"$IP" \
-    "mkdir -p /home/ubuntu/.aws"
+SSH_OPTS=(-o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY")
 
-RC=$?
+# Descobre o usuario SSH: ubuntu (Ubuntu) ou ec2-user (Amazon Linux).
+# Forcavel com FIAPLAB_SSH_USER. BatchMode evita prompt de senha ao
+# testar cada candidato.
+SSH_USER=""
+for U in ${FIAPLAB_SSH_USER:-} ubuntu ec2-user; do
+    if ssh -o BatchMode=yes -o ConnectTimeout=8 "${SSH_OPTS[@]}" "$U@$IP" true 2>/dev/null; then
+        SSH_USER="$U"
+        break
+    fi
+done
 
-if [ "$RC" -ne 0 ]; then
-    echo "❌ Não foi possível conectar à VM."
-    exit "$RC"
+if [ -z "$SSH_USER" ]; then
+    echo "❌ Não foi possível autenticar por SSH (tentei ubuntu e ec2-user)."
+    echo "   Verifique se a VM terminou de iniciar e a chave labsuser.pem."
+    exit 1
 fi
 
-scp \
-    -q \
-    -o LogLevel=error \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$KEY" \
-    "$CREDENTIALS" \
-    ubuntu@"$IP":/home/ubuntu/.aws/credentials
+REMOTE_HOME="/home/$SSH_USER"
 
-RC=$?
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "mkdir -p $REMOTE_HOME/.aws" || {
+    echo "❌ Não foi possível preparar a VM."
+    exit 1
+}
 
-if [ "$RC" -ne 0 ]; then
+scp -q "${SSH_OPTS[@]}" "$CREDENTIALS" "$SSH_USER@$IP:$REMOTE_HOME/.aws/credentials" || {
     echo "❌ Erro ao copiar credenciais."
-    exit "$RC"
-fi
+    exit 1
+}
 
 if [ -f "$CRED_DIR/config" ]; then
-    scp -q -o LogLevel=error -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i "$KEY" \
-        "$CRED_DIR/config" \
-        ubuntu@"$IP":/home/ubuntu/.aws/config
+    scp -q "${SSH_OPTS[@]}" "$CRED_DIR/config" "$SSH_USER@$IP:$REMOTE_HOME/.aws/config"
 fi
 
-ssh \
-    -o LogLevel=error \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$KEY" \
-    ubuntu@"$IP" \
-    "chmod 600 /home/ubuntu/.aws/credentials"
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials"
 
-ssh \
-    -o LogLevel=error \
-    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$KEY" \
-    ubuntu@"$IP"
+ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP"
