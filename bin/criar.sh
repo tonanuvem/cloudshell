@@ -28,6 +28,10 @@ if ! find "$TF_DIR" -maxdepth 1 -type f -name "*.tf" | grep -q .; then
 fi
 
 # Credencial renovada agora, nao no boot do init.sh.
+# Garante Terraform e Ansible instalados (o ajustar.sh usa Ansible),
+# para o script funcionar rodado direto -- e nao so pelo menu.
+prepare_tools || exit 1
+
 aws_require || exit 1
 
 if ! get_account_id; then

@@ -21,11 +21,9 @@ if [ ! -d "$TF_DIR" ]; then
     exit 1
 fi
 
-# O /tmp pode ter sido apagado pelo CloudShell: a lib reconstroi
-# o venv em vez de mandar o aluno reiniciar o menu.
-prepare_tmp_environment
-
-ensure_ansible || exit 1
+# Garante Terraform + Ansible instalados (e reconstroi o /tmp que o
+# CloudShell apaga), para funcionar rodado direto -- e nao so pelo menu.
+prepare_tools || exit 1
 
 aws_require || exit 1
 

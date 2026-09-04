@@ -508,6 +508,24 @@ prepare_tools() {
 
 
 # ============================================================
+# prepare_tools_tf : versao so-Terraform
+#
+# Para os scripts que usam Terraform mas nao o Ansible (ligar,
+# suspender, conectar, status, destruir). Evita baixar o Ansible
+# (~50 MB) num script que nao precisa dele.
+# ============================================================
+
+prepare_tools_tf() {
+
+    prepare_tmp_environment
+    ensure_terraform || return 1
+    prepare_terraform_projects
+
+    return 0
+}
+
+
+# ============================================================
 # TERRAFORM INIT
 #
 # tf_ensure_init resolve o sintoma mais comum do lab: o aluno
