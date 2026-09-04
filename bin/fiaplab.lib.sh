@@ -819,6 +819,16 @@ fiaplab_instances() {
         --output text 2>/dev/null
 }
 
+# IP publico da VM do fiaplab em execucao (via AWS CLI, sem Terraform).
+# Usado pelo comando ip e pelo caminho rapido do conectar.
+fiaplab_running_ip() {
+    aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
+                  "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].PublicIpAddress' \
+        --output text 2>/dev/null | head -1
+}
+
 vm_start() {
 
     local ID STATE NAME

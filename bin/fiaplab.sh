@@ -142,13 +142,10 @@ destruir_ou_refazer() {
 # INICIALIZACAO
 # ============================================================
 
-prepare_tools || {
-    echo ""
-    echo "❌ Não foi possível preparar as ferramentas do lab."
-    echo ""
-    pause_menu
-    exit 1
-}
+# Boot leve: so prepara o /tmp (rapido). Terraform e Ansible sao
+# instalados sob demanda pelas acoes que precisam (criar/destruir/
+# refazer), para abrir o menu nao esperar download a cada sessao.
+prepare_tmp_environment
 
 aws_require
 
@@ -173,8 +170,8 @@ reset_known_hosts
 
 while true; do
 
-    # O CloudShell pode ter limpado o /tmp entre sessoes.
-    prepare_tools >/dev/null 2>&1
+    # O CloudShell pode ter limpado o /tmp entre sessoes (rapido).
+    prepare_tmp_environment >/dev/null 2>&1
 
     echo ""
     echo "========================================"

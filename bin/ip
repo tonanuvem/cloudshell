@@ -38,11 +38,7 @@ done
 # Acesso ao code-server (VM do fiaplab, em execucao)
 # ------------------------------------------------------------
 
-IP=$(aws ec2 describe-instances \
-    --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
-              "Name=instance-state-name,Values=running" \
-    --query 'Reservations[].Instances[].PublicIpAddress' \
-    --output text 2>/dev/null | head -1)
+IP=$(fiaplab_running_ip)
 
 if [ -n "$IP" ] && [ "$IP" != "None" ]; then
     codeserver_callout "$IP"

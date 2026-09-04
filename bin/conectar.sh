@@ -40,33 +40,36 @@ if [ ! -f "$KEY" ]; then
     exit 1
 fi
 
-# Garante Terraform instalado, para o script funcionar rodado direto
-# -- e nao so pelo menu.
-prepare_tools_tf || exit 1
-
 # Regenera o arquivo de credenciais imediatamente antes do scp,
 # para a VM nao receber um token ja vencido.
 aws_require || exit 1
 
-tf_ensure_init "$PROJECT" || exit 1
+echo ""
+echo "Conectando ao projeto: $PROJECT"
+echo ""
+
+# --- Caminho rapido: IP da VM do fiaplab via AWS CLI ---
+# Evita instalar/inicializar o Terraform so para descobrir o IP (o
+# menu ja mostrou esse IP). So vale para a VM unica do fiaplab (node 1).
+IP=""
+if [ "$NODENUM" -eq 1 ]; then
+    IP=$(fiaplab_running_ip)
+fi
+
+# --- Fallback generico: outros projetos / multi-node ---
+# Le o IP do state (precisa do Terraform), instalando-o se necessario.
+if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+    prepare_tools_tf || exit 1
+    tf_ensure_init "$PROJECT" || exit 1
+    mapfile -t IPS < <(ec2_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
+    IP="${IPS[$((NODENUM - 1))]}"
+fi
 
 if [ ! -f "$CREDENTIALS" ]; then
     echo "❌ Credenciais AWS não encontradas:"
     echo "   $CREDENTIALS"
     exit 1
 fi
-
-echo ""
-echo "Conectando ao projeto: $PROJECT"
-echo ""
-
-# IP publico ATUAL via AWS CLI (rapido). Antes usava-se
-# "terraform apply -refresh-only", que levava dezenas de segundos
-# so para atualizar o IP no state -- IP que muda a cada stop/start.
-mapfile -t IPS < <(ec2_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
-
-INDEX=$((NODENUM - 1))
-IP="${IPS[$INDEX]}"
 
 if [ -z "$IP" ] || [ "$IP" = "null" ] || [ "$IP" = "None" ]; then
 
