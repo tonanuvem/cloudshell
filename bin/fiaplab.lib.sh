@@ -951,3 +951,208 @@ tf_write_inventory() {
 
     return 0
 }
+
+
+# ============================================================
+# LIMPEZA GERAL (deep clean) via AWS CLI
+#
+# Remove recursos criados FORA do Terraform tambem (orfaos): varre
+# as regioes do lab, termina todas as EC2, faz o teardown de todas
+# as VPCs NAO-default, solta EIPs, e apaga o bucket de state +
+# limpa os arquivos locais.
+#
+# Tudo best-effort: a role do AWS Academy nega alguns deletes e a
+# ordem entre recursos varia, entao cada passo ignora falhas e
+# segue. NAO toca na VPC default (linha de base da conta).
+#
+# DESTRUTIVO E IRREVERSIVEL. So faz sentido em conta de laboratorio.
+# ============================================================
+
+FIAPLAB_CLEAN_REGIONS="${FIAPLAB_CLEAN_REGIONS:-us-east-1 us-west-2}"
+
+_ec2_terminate_all() {
+
+    local REGION="$1" ID IDS
+
+    IDS=$(aws ec2 describe-instances --region "$REGION" \
+        --filters "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+        --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null)
+
+    [ -n "$IDS" ] || return 0
+
+    for ID in $IDS; do
+        echo "     EC2 $ID: liberando proteções e encerrando"
+        aws ec2 modify-instance-attribute --region "$REGION" \
+            --instance-id "$ID" --no-disable-api-stop 2>/dev/null
+        aws ec2 modify-instance-attribute --region "$REGION" \
+            --instance-id "$ID" --no-disable-api-termination 2>/dev/null
+        aws ec2 terminate-instances --region "$REGION" \
+            --instance-ids "$ID" >/dev/null 2>&1
+    done
+
+    echo "     aguardando EC2 encerrarem..."
+    aws ec2 wait instance-terminated --region "$REGION" --instance-ids $IDS 2>/dev/null
+    return 0
+}
+
+# Teardown completo de UMA VPC nao-default. Best-effort.
+vpc_teardown() {
+
+    local REGION="$1" VPC="$2"
+    local elb lis tg nat ep eig acl aid nic att sg dir perms qkey igw sub rt x sgs
+
+    for elb in $(aws elbv2 describe-load-balancers --region "$REGION" \
+        --query "LoadBalancers[?VpcId=='$VPC'].LoadBalancerArn" --output text 2>/dev/null); do
+        for lis in $(aws elbv2 describe-listeners --region "$REGION" \
+            --load-balancer-arn "$elb" --query 'Listeners[].ListenerArn' --output text 2>/dev/null); do
+            aws elbv2 delete-listener --region "$REGION" --listener-arn "$lis" 2>/dev/null
+        done
+        echo "     ELB $elb"
+        aws elbv2 delete-load-balancer --region "$REGION" --load-balancer-arn "$elb" 2>/dev/null
+    done
+    for tg in $(aws elbv2 describe-target-groups --region "$REGION" \
+        --query "TargetGroups[?VpcId=='$VPC'].TargetGroupArn" --output text 2>/dev/null); do
+        aws elbv2 delete-target-group --region "$REGION" --target-group-arn "$tg" 2>/dev/null
+    done
+
+    for nat in $(aws ec2 describe-nat-gateways --region "$REGION" \
+        --filter "Name=vpc-id,Values=$VPC" --query 'NatGateways[].NatGatewayId' --output text 2>/dev/null); do
+        echo "     NAT $nat"
+        aws ec2 delete-nat-gateway --region "$REGION" --nat-gateway-id "$nat" >/dev/null 2>&1
+    done
+    x=0
+    while [ "$x" -lt 40 ]; do
+        [ -z "$(aws ec2 describe-nat-gateways --region "$REGION" \
+            --filter "Name=vpc-id,Values=$VPC" "Name=state,Values=pending,available,deleting" \
+            --query 'NatGateways[].State' --output text 2>/dev/null)" ] && break
+        sleep 3; x=$((x + 1))
+    done
+
+    for ep in $(aws ec2 describe-vpc-endpoints --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" --query 'VpcEndpoints[].VpcEndpointId' --output text 2>/dev/null); do
+        aws ec2 delete-vpc-endpoints --region "$REGION" --vpc-endpoint-ids "$ep" >/dev/null 2>&1
+    done
+
+    for eig in $(aws ec2 describe-egress-only-internet-gateways --region "$REGION" \
+        --query "EgressOnlyInternetGateways[?Attachments[?VpcId=='$VPC']].EgressOnlyInternetGatewayId" --output text 2>/dev/null); do
+        aws ec2 delete-egress-only-internet-gateway --region "$REGION" --egress-only-internet-gateway-id "$eig" 2>/dev/null
+    done
+
+    for acl in $(aws ec2 describe-network-acls --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" "Name=default,Values=false" \
+        --query 'NetworkAcls[].NetworkAclId' --output text 2>/dev/null); do
+        aws ec2 delete-network-acl --region "$REGION" --network-acl-id "$acl" 2>/dev/null
+    done
+
+    for aid in $(aws ec2 describe-network-interfaces --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" \
+        --query 'NetworkInterfaces[].Association.AssociationId' --output text 2>/dev/null); do
+        [ "$aid" = "None" ] && continue
+        aws ec2 disassociate-address --region "$REGION" --association-id "$aid" 2>/dev/null
+    done
+
+    for nic in $(aws ec2 describe-network-interfaces --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" \
+        --query 'NetworkInterfaces[].NetworkInterfaceId' --output text 2>/dev/null); do
+        att=$(aws ec2 describe-network-interfaces --region "$REGION" \
+            --network-interface-ids "$nic" \
+            --query 'NetworkInterfaces[].Attachment.AttachmentId' --output text 2>/dev/null)
+        if [ -n "$att" ] && [ "$att" != "None" ]; then
+            aws ec2 detach-network-interface --region "$REGION" --attachment-id "$att" --force 2>/dev/null
+            sleep 3
+        fi
+        aws ec2 delete-network-interface --region "$REGION" --network-interface-id "$nic" 2>/dev/null
+    done
+
+    sgs=$(aws ec2 describe-security-groups --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" \
+        --query "SecurityGroups[?GroupName!='default'].GroupId" --output text 2>/dev/null)
+    for sg in $sgs; do
+        for dir in ingress egress; do
+            [ "$dir" = ingress ] && qkey='IpPermissions' || qkey='IpPermissionsEgress'
+            perms=$(aws ec2 describe-security-groups --region "$REGION" \
+                --group-ids "$sg" --query "SecurityGroups[].$qkey" --output json 2>/dev/null)
+            { [ -z "$perms" ] || [ "$perms" = '[]' ]; } && continue
+            aws ec2 revoke-security-group-"$dir" --region "$REGION" \
+                --group-id "$sg" --ip-permissions "$perms" >/dev/null 2>&1
+        done
+    done
+    for sg in $sgs; do
+        echo "     SG $sg"
+        aws ec2 delete-security-group --region "$REGION" --group-id "$sg" 2>/dev/null
+    done
+
+    for igw in $(aws ec2 describe-internet-gateways --region "$REGION" \
+        --filters "Name=attachment.vpc-id,Values=$VPC" \
+        --query 'InternetGateways[].InternetGatewayId' --output text 2>/dev/null); do
+        aws ec2 detach-internet-gateway --region "$REGION" --internet-gateway-id "$igw" --vpc-id "$VPC" 2>/dev/null
+        sleep 2
+        aws ec2 delete-internet-gateway --region "$REGION" --internet-gateway-id "$igw" 2>/dev/null
+    done
+
+    for sub in $(aws ec2 describe-subnets --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" --query 'Subnets[].SubnetId' --output text 2>/dev/null); do
+        aws ec2 delete-subnet --region "$REGION" --subnet-id "$sub" 2>/dev/null
+    done
+
+    for rt in $(aws ec2 describe-route-tables --region "$REGION" \
+        --filters "Name=vpc-id,Values=$VPC" \
+        --query 'RouteTables[?!(Associations[?Main])].RouteTableId' --output text 2>/dev/null); do
+        aws ec2 delete-route-table --region "$REGION" --route-table-id "$rt" 2>/dev/null
+    done
+
+    echo "     VPC $VPC"
+    aws ec2 delete-vpc --region "$REGION" --vpc-id "$VPC" 2>/dev/null
+    return 0
+}
+
+_release_eips() {
+    local REGION="$1" alloc
+    for alloc in $(aws ec2 describe-addresses --region "$REGION" \
+        --query 'Addresses[?AssociationId==`null`].AllocationId' --output text 2>/dev/null); do
+        [ "$alloc" = "None" ] && continue
+        aws ec2 release-address --region "$REGION" --allocation-id "$alloc" 2>/dev/null
+    done
+}
+
+deep_clean() {
+
+    local REGION VPC d
+
+    aws_require || return 1
+    get_account_id 2>/dev/null
+
+    for REGION in $FIAPLAB_CLEAN_REGIONS; do
+        echo ""
+        echo ">> Região $REGION"
+        _ec2_terminate_all "$REGION"
+        for VPC in $(aws ec2 describe-vpcs --region "$REGION" \
+            --filters "Name=isDefault,Values=false" \
+            --query 'Vpcs[].VpcId' --output text 2>/dev/null); do
+            echo "   Teardown da VPC $VPC"
+            vpc_teardown "$REGION" "$VPC"
+        done
+        _release_eips "$REGION"
+    done
+
+    echo ""
+    echo ">> Removendo bucket de state e limpando arquivos locais..."
+    if [ -n "$BUCKET_NAME" ]; then
+        aws s3 rb "s3://$BUCKET_NAME" --force 2>/dev/null && echo "   bucket $BUCKET_NAME removido"
+    fi
+    if [ -d "$CONFIG_DIR" ]; then
+        for d in "$CONFIG_DIR"/*; do
+            [ -L "$d/.terraform" ] && rm -f "$d/.terraform"
+            rm -f "$d/backend.tf"
+        done
+    fi
+    rm -rf "$TMP_APP_DIR" 2>/dev/null
+    rm -f "$HOME/.fiaplab" "$HOME/.terraformrc" 2>/dev/null
+    rm -rf "$CRED_DIR" 2>/dev/null
+    rm -f "$CONFIG_DIR/hosts" 2>/dev/null
+    reset_known_hosts
+
+    echo ""
+    echo "✅ Limpeza geral concluída."
+    return 0
+}

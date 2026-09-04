@@ -78,14 +78,15 @@ destruir_ou_refazer() {
     echo " DESTRUIR OU REFAZER AMBIENTE"
     echo "========================================"
     echo ""
-    echo " D) Destruir  - remove a VM e a infraestrutura (não recria)"
-    echo " R) Refazer   - destrói e recria o ambiente do zero"
+    echo " D) Destruir      - remove a VM e a infraestrutura (não recria)"
+    echo " R) Refazer       - destrói e recria o ambiente do zero"
+    echo " L) Limpeza geral - ⚠️ remove TODOS os recursos do lab na conta"
     echo " C) Cancelar"
     echo ""
 
     local OP CONFIRMA RC
 
-    read -rp "Escolha [D/R/C]: " OP
+    read -rp "Escolha [D/R/L/C]: " OP
 
     case "$OP" in
 
@@ -127,6 +128,32 @@ destruir_ou_refazer() {
                 echo " ❌ Falha ao recriar o ambiente."
                 echo "========================================"
             fi
+
+            return "$RC"
+            ;;
+
+        [Ll])
+            echo ""
+            echo "========================================"
+            echo " ⚠️  LIMPEZA GERAL"
+            echo "========================================"
+            echo ""
+            echo "Isto REMOVE TODOS os recursos do laboratório na conta"
+            echo "${ACCOUNT_ID:-} — inclusive a VM do code-server e QUALQUER"
+            echo "outra EC2/VPC não-default em us-east-1 e us-west-2, além"
+            echo "do bucket de state e dos arquivos locais."
+            echo ""
+            echo "Ação IRREVERSÍVEL."
+            echo ""
+            read -rp "Para confirmar, digite LIMPAR: " CONFIRMA
+            [ "$CONFIRMA" = "LIMPAR" ] || { echo "Cancelado."; return 0; }
+
+            aws_require || return 1
+
+            deep_clean
+            RC=$?
+
+            cfg_set LAST_PROJECT "" 2>/dev/null
 
             return "$RC"
             ;;
