@@ -86,7 +86,7 @@ echo ""
 echo ">> Terraform apply..."
 echo ""
 
-terraform -chdir="$TF_DIR" apply -auto-approve
+tf_run_unlock "$TF_DIR" apply -auto-approve
 
 RC=$?
 

@@ -65,7 +65,7 @@ echo ""
 echo ">> Terraform destroy..."
 echo ""
 
-terraform -chdir="$TF_DIR" destroy -auto-approve
+tf_run_unlock "$TF_DIR" destroy -auto-approve
 
 RC=$?
 

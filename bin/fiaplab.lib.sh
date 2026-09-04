@@ -554,6 +554,55 @@ tf_ensure_init() {
 
 
 # ============================================================
+# tf_run_unlock : terraform com auto-liberacao de lock preso
+#
+# No CloudShell as sessoes morrem no meio de um apply/destroy e
+# deixam o state lock (backend S3, use_lockfile=true) preso. O
+# proximo apply falha com "Error acquiring the state lock" / 412
+# PreconditionFailed. Como e um ambiente de um aluno so, um lock
+# preso e quase sempre resto de sessao morta, nao concorrencia
+# real -- entao liberamos e tentamos de novo uma vez, escondendo
+# o erro do aluno.
+#
+# Uso: tf_run_unlock "$TF_DIR" apply -auto-approve
+# ============================================================
+
+tf_run_unlock() {
+
+    local DIR="$1"
+    shift
+
+    local TMP RC LOCK_ID
+    TMP=$(mktemp) || { terraform -chdir="$DIR" "$@"; return $?; }
+
+    terraform -chdir="$DIR" "$@" 2>&1 | tee "$TMP"
+    RC=${PIPESTATUS[0]}
+
+    if [ "$RC" -ne 0 ] && grep -q "Error acquiring the state lock" "$TMP"; then
+
+        # Extrai o UUID do lock (formato 8-4-4-4-12; nao casa com
+        # RequestID/HostID, que tem outro formato).
+        LOCK_ID=$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$TMP" | head -1)
+
+        if [ -n "$LOCK_ID" ]; then
+            echo ""
+            echo "⚠️ State lock preso (provavelmente de uma sessão anterior encerrada)."
+            echo ">> Liberando o lock e tentando novamente..."
+            echo ""
+
+            terraform -chdir="$DIR" force-unlock -force "$LOCK_ID"
+
+            terraform -chdir="$DIR" "$@" 2>&1 | tee "$TMP"
+            RC=${PIPESTATUS[0]}
+        fi
+    fi
+
+    rm -f "$TMP"
+    return "$RC"
+}
+
+
+# ============================================================
 # INSTANCIAS DO STATE
 #
 # Le os IDs direto do state. Os scripts antigos rodavam
