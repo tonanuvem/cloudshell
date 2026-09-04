@@ -142,7 +142,10 @@ if [ -f "$AJUSTAR_SCRIPT" ]; then
 
     mkdir -p "$INVENTORY_DIR"
 
-    bash "$AJUSTAR_SCRIPT"
+    # Roda o ajustar.sh com o CWD dentro da pasta do projeto: alguns
+    # ajustar.sh (ex.: vm-fiap) leem "terraform output" sem -chdir e
+    # so funcionam a partir do diretorio do projeto.
+    ( cd "$TF_DIR" && bash "$AJUSTAR_SCRIPT" )
 
     RC=$?
 
