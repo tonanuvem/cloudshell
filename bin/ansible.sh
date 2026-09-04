@@ -57,7 +57,9 @@ if [ -f "$AJUSTAR" ]; then
 
     mkdir -p "$INVENTORY_DIR"
 
-    bash "$AJUSTAR"
+    # CWD na pasta do projeto: alguns ajustar.sh leem "terraform
+    # output" sem -chdir e so funcionam a partir do diretorio deles.
+    ( cd "$TF_DIR" && bash "$AJUSTAR" )
 
     RC=$?
 
