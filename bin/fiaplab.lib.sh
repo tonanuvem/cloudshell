@@ -542,11 +542,38 @@ tf_init() {
 
     [ -n "$BUCKET_NAME" ] || get_account_id || return 1
 
-    terraform -chdir="$TF_DIR" init -reconfigure -input=false \
-        -backend-config="bucket=$BUCKET_NAME" \
-        -backend-config="key=${PROJECT}/terraform.tfstate" \
-        -backend-config="region=$AWS_REGION" \
+    local -a BC=(
+        -backend-config="bucket=$BUCKET_NAME"
+        -backend-config="key=${PROJECT}/terraform.tfstate"
+        -backend-config="region=$AWS_REGION"
         -backend-config="use_lockfile=true"
+    )
+
+    local TMP RC
+    TMP=$(mktemp) || {
+        terraform -chdir="$TF_DIR" init -reconfigure -input=false "${BC[@]}"
+        return $?
+    }
+
+    terraform -chdir="$TF_DIR" init -reconfigure -input=false "${BC[@]}" 2>&1 | tee "$TMP"
+    RC=${PIPESTATUS[0]}
+
+    # Projeto criado antes com state LOCAL (ex.: pelo iniciar.sh do
+    # proprio projeto, sem backend S3): ao configurar o backend, o
+    # Terraform quer migrar o state e, com -input=false, aborta pedindo
+    # aprovacao. Migra automaticamente para o S3 preservando os
+    # recursos existentes (-force-copy pula a confirmacao).
+    if [ "$RC" -ne 0 ] && grep -q "state migration" "$TMP"; then
+        echo ""
+        echo "⚠️ Estado local detectado (projeto criado fora do backend S3)."
+        echo ">> Migrando o estado para o S3 (preservando os recursos)..."
+        echo ""
+        terraform -chdir="$TF_DIR" init -migrate-state -force-copy -input=false "${BC[@]}" 2>&1 | tee "$TMP"
+        RC=${PIPESTATUS[0]}
+    fi
+
+    rm -f "$TMP"
+    return "$RC"
 }
 
 tf_ensure_init() {
