@@ -1053,13 +1053,22 @@ refresh_vm_credentials() {
             "$SSH_USER@$IP:$REMOTE_HOME/.aws/config" 2>/dev/null
         ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials"
 
-        # Valida DENTRO da VM.
-        if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "aws sts get-caller-identity >/dev/null 2>&1"; then
-            echo "✅ Credenciais atualizadas e validadas na VM."
+        # Valida DENTRO da VM -- mas so se a AWS CLI existir la. O
+        # Terraform le o ~/.aws/credentials direto (via SDK), entao a
+        # ausencia da CLI nao e problema: nesse caso so confirmamos a
+        # copia. Falha real = CLI presente e STS falhando.
+        if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "command -v aws >/dev/null 2>&1"; then
+            if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "aws sts get-caller-identity >/dev/null 2>&1"; then
+                echo "✅ Credenciais atualizadas e validadas na VM."
+            else
+                echo "⚠️ Credenciais copiadas, mas o STS falhou na VM"
+                echo "   (o token pode estar realmente inválido)."
+                exit 1
+            fi
         else
-            echo "⚠️ Credenciais copiadas, mas a validação na VM falhou"
-            echo "   (a AWS CLI está instalada na VM?)."
-            exit 1
+            echo "✅ Credenciais copiadas para a VM."
+            echo "   (A AWS CLI não está instalada na VM; o Terraform usa"
+            echo "    o arquivo ~/.aws/credentials diretamente.)"
         fi
     )
     return $?
