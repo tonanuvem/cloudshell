@@ -213,7 +213,8 @@ while true; do
     echo "1) Ligar VM"
     echo "2) Suspender VM"
     echo "3) Conectar via SSH"
-    echo "4) Destruir ou Refazer ambiente"
+    echo "4) Atualizar credenciais na VM"
+    echo "5) Destruir ou Refazer ambiente"
     echo "0) Sair"
     echo ""
 
@@ -254,6 +255,17 @@ while true; do
             ;;
 
         4)
+            if aws_require; then
+                echo ""
+                echo "========================================"
+                echo " ATUALIZAR CREDENCIAIS NA VM"
+                echo "========================================"
+                refresh_vm_credentials
+            fi
+            pause_menu
+            ;;
+
+        5)
             destruir_ou_refazer
             pause_menu
             ;;
