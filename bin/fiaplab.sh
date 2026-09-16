@@ -255,13 +255,13 @@ while true; do
             ;;
 
         4)
-            if aws_require; then
-                echo ""
-                echo "========================================"
-                echo " ATUALIZAR CREDENCIAIS NA VM"
-                echo "========================================"
-                refresh_vm_credentials
-            fi
+            # Sem guard de aws_require: o refresh cuida da credencial
+            # (e oferece entrada manual se o token automático falhar).
+            echo ""
+            echo "========================================"
+            echo " ATUALIZAR CREDENCIAIS NA VM"
+            echo "========================================"
+            refresh_vm_credentials
             pause_menu
             ;;
 

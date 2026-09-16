@@ -884,6 +884,82 @@ vm_stop() {
 
 
 # ============================================================
+# _cred_file_valida : STS usando SO o arquivo estatico
+#
+# O provedor nativo do CloudShell tem precedencia sobre o arquivo,
+# entao para testar (e depois usar) o token do arquivo e preciso
+# desabilitar o provedor nativo nessa chamada.
+# ============================================================
+
+_cred_file_valida() {
+    local FILE="$1"
+    [ -f "$FILE" ] || return 1
+    env -u AWS_CONTAINER_CREDENTIALS_FULL_URI \
+        -u AWS_CONTAINER_AUTHORIZATION_TOKEN \
+        AWS_SHARED_CREDENTIALS_FILE="$FILE" \
+        aws sts get-caller-identity >/dev/null 2>&1
+}
+
+
+# ============================================================
+# _read_manual_credentials : le um bloco colado pelo usuario
+#
+# Fallback para quando a sessao do CloudShell venceu: o aluno cola
+# o bloco de credenciais do AWS Academy (AWS Details -> AWS CLI).
+# Valida por STS antes de aceitar; grava em $CRED_DIR/credentials.
+# ============================================================
+
+_read_manual_credentials() {
+
+    local TMP MANUAL
+
+    echo ""
+    echo "Cole o bloco de credenciais do AWS Academy"
+    echo "(AWS Details → AWS CLI), com as linhas aws_access_key_id,"
+    echo "aws_secret_access_key e aws_session_token."
+    echo "Ao terminar, dê ENTER e pressione Ctrl-D:"
+    echo ""
+
+    MANUAL=$(cat)
+
+    if [ -z "${MANUAL//[[:space:]]/}" ]; then
+        echo "❌ Nada foi colado."
+        return 1
+    fi
+
+    mkdir -p "$CRED_DIR"
+    chmod 700 "$CRED_DIR" 2>/dev/null
+
+    TMP=$(mktemp) || return 1
+
+    # Adiciona o cabecalho [default] se o usuario nao colou.
+    if printf '%s\n' "$MANUAL" | grep -q '^\['; then
+        printf '%s\n' "$MANUAL" > "$TMP"
+    else
+        { echo "[default]"; printf '%s\n' "$MANUAL"; } > "$TMP"
+    fi
+
+    if ! _cred_file_valida "$TMP"; then
+        echo ""
+        echo "❌ As credenciais coladas não validaram (STS). Nada foi enviado à VM."
+        rm -f "$TMP"
+        return 1
+    fi
+
+    ( umask 077; cp "$TMP" "$CRED_DIR/credentials" )
+    rm -f "$TMP"
+
+    # Garante o config (regiao) para a VM.
+    if [ ! -f "$CRED_DIR/config" ]; then
+        ( umask 077; printf '[default]\nregion = %s\noutput = json\n' "$AWS_REGION" > "$CRED_DIR/config" )
+    fi
+
+    echo "✅ Credenciais manuais validadas."
+    return 0
+}
+
+
+# ============================================================
 # refresh_vm_credentials : reenvia credenciais frescas para a VM
 #
 # As credenciais copiadas para dentro da VM (~/.aws/credentials) sao
@@ -892,40 +968,36 @@ vm_stop() {
 # pelo conectar.sh (que ja renova ao conectar por SSH), entao esta
 # opcao renova e reenvia sem abrir shell.
 #
-# Seguranca: gera o token novo, VALIDA por STS antes de sobrescrever
-# (para nao mandar um token igualmente expirado) e, ao final, valida
-# tambem DENTRO da VM.
+# Fluxo: tenta renovar automaticamente e VALIDA por STS. Se o token
+# automatico estiver expirado (sessao do CloudShell vencida), oferece
+# colar as credenciais manualmente (AWS Academy). So envia depois de
+# validar, e valida tambem DENTRO da VM ao final.
 # ============================================================
 
 refresh_vm_credentials() {
 
-    local IP SSH_USER REMOTE_HOME OLD_REMOTE NEW_LOCAL U
+    local RESP
     local KEY="$ENV_DIR/labsuser.pem"
 
-    # 1. Renova as credenciais do CloudShell e (re)gera o arquivo.
-    aws_require || return 1
+    # 1. Tenta renovar automaticamente (gera/atualiza o arquivo estatico).
+    aws_login >/dev/null 2>&1
 
-    if [ ! -f "$CRED_DIR/credentials" ]; then
-        echo "❌ Não foi possível gerar o arquivo de credenciais."
-        return 1
-    fi
-
-    # 2. Testa que o token novo e VALIDO antes de enviar.
-    if ! AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials" \
-         aws sts get-caller-identity >/dev/null 2>&1; then
+    # 2. Valida o ARQUIVO que sera enviado (forcando o uso dele).
+    if ! _cred_file_valida "$CRED_DIR/credentials"; then
         echo ""
-        echo "❌ O token gerado ainda está expirado."
-        echo "   A sessão do laboratório venceu. No AWS Academy clique em"
-        echo "   'Start Lab' (círculo verde) e reabra o CloudShell; depois"
-        echo "   tente novamente."
-        return 1
-    fi
-
-    # 3. A VM precisa estar em execucao.
-    IP=$(fiaplab_running_ip)
-    if [ -z "$IP" ] || [ "$IP" = "None" ]; then
-        echo "❌ A VM do FIAP LAB não está em execução. Use 1) Ligar VM."
-        return 1
+        echo "⚠️ Não foi possível obter um token válido automaticamente"
+        echo "   (a sessão do CloudShell provavelmente venceu)."
+        echo ""
+        read -rp "Colar as credenciais manualmente? (S/n): " RESP
+        case "$RESP" in
+            [Nn])
+                echo ""
+                echo "Cancelado. No AWS Academy clique em 'Start Lab' e reabra"
+                echo "o CloudShell; ou rode esta opção de novo e escolha colar."
+                return 1
+                ;;
+        esac
+        _read_manual_credentials || return 1
     fi
 
     if [ ! -f "$KEY" ]; then
@@ -933,60 +1005,64 @@ refresh_vm_credentials() {
         return 1
     fi
 
-    local SSH_OPTS=(-o LogLevel=error -o StrictHostKeyChecking=no \
-                    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -i "$KEY")
+    # As credenciais validas estao em $CRED_DIR/credentials. Num subshell,
+    # forca o uso do ARQUIVO (o provedor nativo pode estar expirado) sem
+    # alterar o ambiente do menu.
+    (
+        export AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials"
+        [ -f "$CRED_DIR/config" ] && export AWS_CONFIG_FILE="$CRED_DIR/config"
+        unset AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN
 
-    # 4. Descobre o usuario SSH (ubuntu ou ec2-user).
-    SSH_USER=""
-    for U in ${FIAPLAB_SSH_USER:-} ubuntu ec2-user; do
-        if ssh -o BatchMode=yes "${SSH_OPTS[@]}" "$U@$IP" true 2>/dev/null; then
-            SSH_USER="$U"
-            break
+        IP=$(fiaplab_running_ip)
+        if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            echo "❌ A VM do FIAP LAB não está em execução. Use 1) Ligar VM."
+            exit 1
         fi
-    done
-    if [ -z "$SSH_USER" ]; then
-        echo "❌ Não foi possível conectar por SSH à VM ($IP)."
-        return 1
-    fi
-    REMOTE_HOME="/home/$SSH_USER"
 
-    # 5. Compara com o que ja esta na VM (informativo).
-    OLD_REMOTE=$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" \
-        "cat $REMOTE_HOME/.aws/credentials 2>/dev/null" 2>/dev/null)
-    NEW_LOCAL=$(cat "$CRED_DIR/credentials" 2>/dev/null)
-    if [ -n "$OLD_REMOTE" ] && [ "$OLD_REMOTE" = "$NEW_LOCAL" ]; then
-        echo "ℹ️ O token no CloudShell é o mesmo que já está na VM"
-        echo "   (mas já validado como ativo acima)."
-    fi
+        SSH_OPTS=(-o LogLevel=error -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -i "$KEY")
 
-    # 6. Envia credentials + config.
-    echo ">> Enviando credenciais para $SSH_USER@$IP ..."
-    ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "mkdir -p $REMOTE_HOME/.aws" || {
-        echo "❌ Falha ao preparar a VM."
-        return 1
-    }
-    scp -q "${SSH_OPTS[@]}" "$CRED_DIR/credentials" \
-        "$SSH_USER@$IP:$REMOTE_HOME/.aws/credentials" || {
-        echo "❌ Falha ao copiar as credenciais."
-        return 1
-    }
-    if [ -f "$CRED_DIR/config" ]; then
-        scp -q "${SSH_OPTS[@]}" "$CRED_DIR/config" \
+        SSH_USER=""
+        for U in ${FIAPLAB_SSH_USER:-} ubuntu ec2-user; do
+            if ssh -o BatchMode=yes "${SSH_OPTS[@]}" "$U@$IP" true 2>/dev/null; then
+                SSH_USER="$U"
+                break
+            fi
+        done
+        if [ -z "$SSH_USER" ]; then
+            echo "❌ Não foi possível conectar por SSH à VM ($IP)."
+            exit 1
+        fi
+        REMOTE_HOME="/home/$SSH_USER"
+
+        # Compara com o que ja esta na VM (informativo).
+        OLD_REMOTE=$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" \
+            "cat $REMOTE_HOME/.aws/credentials 2>/dev/null" 2>/dev/null)
+        NEW_LOCAL=$(cat "$CRED_DIR/credentials" 2>/dev/null)
+        if [ -n "$OLD_REMOTE" ] && [ "$OLD_REMOTE" = "$NEW_LOCAL" ]; then
+            echo "ℹ️ O token é o mesmo que já está na VM (mas validado como ativo)."
+        fi
+
+        echo ">> Enviando credenciais para $SSH_USER@$IP ..."
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "mkdir -p $REMOTE_HOME/.aws" || {
+            echo "❌ Falha ao preparar a VM."; exit 1; }
+        scp -q "${SSH_OPTS[@]}" "$CRED_DIR/credentials" \
+            "$SSH_USER@$IP:$REMOTE_HOME/.aws/credentials" || {
+            echo "❌ Falha ao copiar as credenciais."; exit 1; }
+        [ -f "$CRED_DIR/config" ] && scp -q "${SSH_OPTS[@]}" "$CRED_DIR/config" \
             "$SSH_USER@$IP:$REMOTE_HOME/.aws/config" 2>/dev/null
-    fi
-    ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials"
+        ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials"
 
-    # 7. Valida DENTRO da VM.
-    if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" \
-        "aws sts get-caller-identity >/dev/null 2>&1"; then
-        echo "✅ Credenciais atualizadas e validadas na VM."
-    else
-        echo "⚠️ Credenciais copiadas, mas a validação na VM falhou"
-        echo "   (a AWS CLI está instalada na VM?)."
-        return 1
-    fi
-
-    return 0
+        # Valida DENTRO da VM.
+        if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "aws sts get-caller-identity >/dev/null 2>&1"; then
+            echo "✅ Credenciais atualizadas e validadas na VM."
+        else
+            echo "⚠️ Credenciais copiadas, mas a validação na VM falhou"
+            echo "   (a AWS CLI está instalada na VM?)."
+            exit 1
+        fi
+    )
+    return $?
 }
 
 
