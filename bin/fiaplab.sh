@@ -195,6 +195,12 @@ fi
 # Limpa host keys antigas de VMs recriadas antes de qualquer conexao.
 reset_known_hosts
 
+# No boot, ja mantem as credenciais da VM atualizadas (best-effort, sem
+# prompt: se a sessao expirou ou a VM esta parada, apenas ignora).
+echo ""
+echo ">> Atualizando credenciais da VM..."
+refresh_vm_credentials auto
+
 while true; do
 
     # O CloudShell pode ter limpado o /tmp entre sessoes (rapido).

@@ -976,7 +976,9 @@ _read_manual_credentials() {
 
 refresh_vm_credentials() {
 
-    local RESP
+    # MODE="auto" (usado no boot): best-effort, sem prompt manual e com
+    # saidas curtas -- nao trava/atrapalha a abertura do menu.
+    local MODE="$1" RESP
     local KEY="$ENV_DIR/labsuser.pem"
 
     # 1. Tenta renovar automaticamente (gera/atualiza o arquivo estatico).
@@ -984,6 +986,10 @@ refresh_vm_credentials() {
 
     # 2. Valida o ARQUIVO que sera enviado (forcando o uso dele).
     if ! _cred_file_valida "$CRED_DIR/credentials"; then
+        if [ "$MODE" = "auto" ]; then
+            echo "ℹ️ Sessão AWS expirada — use a opção 4 para atualizar as credenciais."
+            return 1
+        fi
         echo ""
         echo "⚠️ Não foi possível obter um token válido automaticamente"
         echo "   (a sessão do CloudShell provavelmente venceu)."
@@ -1015,6 +1021,10 @@ refresh_vm_credentials() {
 
         IP=$(fiaplab_running_ip)
         if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+            if [ "$MODE" = "auto" ]; then
+                echo "ℹ️ VM desligada — credenciais não atualizadas."
+                exit 0
+            fi
             echo "❌ A VM do FIAP LAB não está em execução. Use 1) Ligar VM."
             exit 1
         fi
