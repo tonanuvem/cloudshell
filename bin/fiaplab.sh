@@ -261,6 +261,11 @@ while true; do
             echo "========================================"
             echo " ATUALIZAR CREDENCIAIS NA VM"
             echo "========================================"
+            echo ""
+            # Garante Terraform e Ansible no CloudShell (best-effort;
+            # não bloqueia o refresh se a instalação falhar).
+            echo ">> Verificando Terraform e Ansible..."
+            prepare_tools || echo "   ⚠️ Não foi possível preparar todas as ferramentas; seguindo."
             refresh_vm_credentials
             pause_menu
             ;;
