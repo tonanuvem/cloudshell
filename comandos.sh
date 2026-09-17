@@ -30,26 +30,27 @@ for NOME in fiaplab.sh ip; do
 done
 
 # ------------------------------------------------------------
-# ~/fiaplab.sh : atualiza o repo antes de abrir o menu
+# Lancadores no $HOME: ~/fiaplab.sh e ~/ip.
 #
-# O auto-update fica no lancador (nao no proprio menu) porque o
-# lancador vive no $HOME, fora do repo: assim o "git pull" pode
-# reescrever bin/ com seguranca e so entao o exec roda o menu ja
-# atualizado -- sem o risco de um script bash se auto-modificar
-# enquanto executa.
+# Cada um verifica se o repo existe, atualiza-o (git pull, best-effort)
+# e so entao executa o comando em bin/. O pull fica no lancador (fora
+# do repo, no $HOME) para reescrever bin/ com seguranca antes do exec
+# -- sem o risco de um script se auto-modificar enquanto roda.
 #
 # best-effort: com timeout, silencioso e --ff-only. Sem rede, com
-# GitHub fora do ar ou com edicoes locais no clone, o pull falha
-# sem quebrar e o menu abre com a versao atual.
+# GitHub fora do ar ou com edicoes locais no clone, o pull falha sem
+# quebrar e o comando roda com a versao atual.
 #
-# Desative com FIAPLAB_NO_UPDATE=1.
+# Desative o update com FIAPLAB_NO_UPDATE=1.
 # ------------------------------------------------------------
 
-cat > "$HOME/fiaplab.sh" <<LAUNCH
+for NOME in fiaplab.sh ip; do
+
+    cat > "$HOME/$NOME" <<LAUNCH
 #!/bin/bash
-# Lancador gerado por comandos.sh -- NAO edite; edite $BIN_DIR/fiaplab.sh.
+# Lancador gerado por comandos.sh -- NAO edite; edite $BIN_DIR/$NOME.
 REPO="$SCRIPT_DIR"
-BIN="$BIN_DIR/fiaplab.sh"
+BIN="$BIN_DIR/$NOME"
 if [ ! -x "\$BIN" ]; then
     echo ""
     echo "❌ FIAP LAB não encontrado em: \$REPO"
@@ -71,27 +72,10 @@ if [ -z "\$FIAPLAB_NO_UPDATE" ] && [ -d "\$REPO/.git" ]; then
 fi
 exec "\$BIN" "\$@"
 LAUNCH
-chmod +x "$HOME/fiaplab.sh"
 
-# ------------------------------------------------------------
-# ~/ip : lancador simples (sem update, para nao adicionar rede a
-# um comando rapido -- o menu ja atualiza o repo).
-# ------------------------------------------------------------
+    chmod +x "$HOME/$NOME"
 
-cat > "$HOME/ip" <<LAUNCH
-#!/bin/bash
-# Lancador gerado por comandos.sh -- NAO edite; edite $BIN_DIR/ip.
-BIN="$BIN_DIR/ip"
-if [ ! -x "\$BIN" ]; then
-    echo ""
-    echo "❌ FIAP LAB não encontrado em: $SCRIPT_DIR"
-    echo "   Restaure com: git clone https://github.com/tonanuvem/cloudshell \"$SCRIPT_DIR\" && bash \"$SCRIPT_DIR/init.sh\""
-    echo ""
-    exit 1
-fi
-exec "\$BIN" "\$@"
-LAUNCH
-chmod +x "$HOME/ip"
+done
 
 echo ""
 echo "========================================"
