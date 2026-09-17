@@ -7,6 +7,9 @@
 # (via AWS CLI, sem terraform refresh) e mostra a URL do
 # code-server da VM do fiaplab.
 #
+# Tambem atualiza as credenciais da VM (best-effort, sem prompt),
+# igual ao boot do menu.
+#
 # Aceita um argumento opcional (projeto), ignorado -- e mantido
 # so para compatibilidade com quem chama "ip <projeto>".
 # ============================================================
@@ -47,3 +50,10 @@ else
     echo "Acesso ao FIAP LAB (Code Server): a VM não está em execução."
     echo ""
 fi
+
+# ------------------------------------------------------------
+# Atualiza as credenciais da VM (best-effort, sem prompt).
+# ------------------------------------------------------------
+
+echo ">> Atualizando credenciais da VM..."
+refresh_vm_credentials auto
