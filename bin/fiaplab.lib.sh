@@ -1335,6 +1335,12 @@ deep_clean() {
             vpc_teardown "$REGION" "$VPC"
         done
         _release_eips "$REGION"
+
+        # Remove a key pair do lab (orfã em contas antigas): se sobrar,
+        # o proximo terraform apply falha com InvalidKeyPair.Duplicate.
+        # NAO mexe na 'vockey' (fornecida pelo AWS Academy).
+        aws ec2 delete-key-pair --region "$REGION" \
+            --key-name chave-fiaplab-vm 2>/dev/null
     done
 
     echo ""
