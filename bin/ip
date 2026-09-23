@@ -41,13 +41,27 @@ done
 # Acesso ao code-server (VM do fiaplab, em execucao)
 # ------------------------------------------------------------
 
-IP=$(fiaplab_running_ip)
+# Uma URL de code-server por VM em execução (badge e senha uma vez só).
+mapfile -t VMS < <(fiaplab_running_name_ip)
 
-if [ -n "$IP" ] && [ "$IP" != "None" ]; then
-    codeserver_callout "$IP"
+if [ "${#VMS[@]}" -eq 0 ]; then
+    echo ""
+    echo "Acesso ao FIAP LAB (Code Server): nenhuma VM em execução."
+    echo ""
 else
     echo ""
-    echo "Acesso ao FIAP LAB (Code Server): a VM não está em execução."
+    echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
+    echo "  ${C_DIM}copie e cole a URL da sua VM (o clique não abre no CloudShell):${C_OFF}"
+    echo ""
+    for VM in "${VMS[@]}"; do
+        VM_NAME="${VM%%$'\t'*}"
+        VM_IP="${VM##*$'\t'}"
+        [ -n "$VM_IP" ] && [ "$VM_IP" != "None" ] || continue
+        printf '      %-20s %shttp://%s:%s%s\n' \
+            "$VM_NAME" "$C_URL" "$VM_IP" "$CODE_SERVER_PORT" "$C_OFF"
+    done
+    echo ""
+    echo "      senha: ${C_BOLD}${CODE_SERVER_PASSWORD}${C_OFF}"
     echo ""
 fi
 

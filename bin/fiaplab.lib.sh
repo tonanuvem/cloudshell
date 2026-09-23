@@ -834,6 +834,15 @@ fiaplab_running_ip() {
     fiaplab_running_ips | head -1
 }
 
+# "nome<TAB>ip" de cada VM do fiaplab em execucao (uma por linha).
+fiaplab_running_name_ip() {
+    aws ec2 describe-instances \
+        --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
+                  "Name=instance-state-name,Values=running" \
+        --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,PublicIpAddress]' \
+        --output text 2>/dev/null | grep -vE '^[[:space:]]*$'
+}
+
 vm_start() {
 
     local ID STATE NAME
