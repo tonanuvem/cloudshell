@@ -819,14 +819,19 @@ fiaplab_instances() {
         --output text 2>/dev/null
 }
 
-# IP publico da VM do fiaplab em execucao (via AWS CLI, sem Terraform).
-# Usado pelo comando ip e pelo caminho rapido do conectar.
-fiaplab_running_ip() {
+# IPs publicos de TODAS as VMs do fiaplab em execucao (via AWS CLI).
+fiaplab_running_ips() {
     aws ec2 describe-instances \
         --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
                   "Name=instance-state-name,Values=running" \
         --query 'Reservations[].Instances[].PublicIpAddress' \
-        --output text 2>/dev/null | head -1
+        --output text 2>/dev/null | tr '\t' '\n' | grep -vE '^(None)?$'
+}
+
+# IP da 1a VM do fiaplab em execucao (usado pelo caminho rapido do
+# conectar e onde so faz sentido uma VM).
+fiaplab_running_ip() {
+    fiaplab_running_ips | head -1
 }
 
 vm_start() {
@@ -974,6 +979,53 @@ _read_manual_credentials() {
 # validar, e valida tambem DENTRO da VM ao final.
 # ============================================================
 
+# Envia as credenciais para UMA VM e valida. Espera que o ambiente ja
+# aponte para o arquivo estatico (e chamado dentro do subshell abaixo).
+# Imprime status por VM e retorna 0 (ok) / 1 (falha).
+_push_creds_to_vm() {
+
+    local IP="$1"
+    local KEY="$ENV_DIR/labsuser.pem"
+    local SSH_OPTS=(-o LogLevel=error -o StrictHostKeyChecking=no \
+                    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -i "$KEY")
+    local U SSH_USER="" REMOTE_HOME
+
+    for U in ${FIAPLAB_SSH_USER:-} ubuntu ec2-user; do
+        if ssh -o BatchMode=yes "${SSH_OPTS[@]}" "$U@$IP" true 2>/dev/null; then
+            SSH_USER="$U"
+            break
+        fi
+    done
+    if [ -z "$SSH_USER" ]; then
+        echo "   ❌ $IP: não foi possível conectar por SSH."
+        return 1
+    fi
+    REMOTE_HOME="/home/$SSH_USER"
+
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "mkdir -p $REMOTE_HOME/.aws" 2>/dev/null || {
+        echo "   ❌ $IP: falha ao preparar a VM."; return 1; }
+    scp -q "${SSH_OPTS[@]}" "$CRED_DIR/credentials" \
+        "$SSH_USER@$IP:$REMOTE_HOME/.aws/credentials" 2>/dev/null || {
+        echo "   ❌ $IP: falha ao copiar credenciais."; return 1; }
+    [ -f "$CRED_DIR/config" ] && scp -q "${SSH_OPTS[@]}" "$CRED_DIR/config" \
+        "$SSH_USER@$IP:$REMOTE_HOME/.aws/config" 2>/dev/null
+    ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials" 2>/dev/null
+
+    # Valida na VM so se a AWS CLI existir (o Terraform le o arquivo direto).
+    if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "command -v aws >/dev/null 2>&1"; then
+        if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "aws sts get-caller-identity >/dev/null 2>&1"; then
+            echo "   ✅ $IP ($SSH_USER): atualizado e validado."
+        else
+            echo "   ⚠️ $IP ($SSH_USER): copiado, mas o STS falhou."
+            return 1
+        fi
+    else
+        echo "   ✅ $IP ($SSH_USER): copiado (sem AWS CLI; Terraform usa o arquivo)."
+    fi
+    return 0
+}
+
+
 refresh_vm_credentials() {
 
     # MODE="auto" (usado no boot): best-effort, sem prompt manual e com
@@ -1013,73 +1065,46 @@ refresh_vm_credentials() {
 
     # As credenciais validas estao em $CRED_DIR/credentials. Num subshell,
     # forca o uso do ARQUIVO (o provedor nativo pode estar expirado) sem
-    # alterar o ambiente do menu.
+    # alterar o ambiente do menu, e envia para TODAS as VMs em execucao.
     (
         export AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials"
         [ -f "$CRED_DIR/config" ] && export AWS_CONFIG_FILE="$CRED_DIR/config"
         unset AWS_CONTAINER_CREDENTIALS_FULL_URI AWS_CONTAINER_AUTHORIZATION_TOKEN
 
-        IP=$(fiaplab_running_ip)
-        if [ -z "$IP" ] || [ "$IP" = "None" ]; then
+        mapfile -t IPS < <(fiaplab_running_ips)
+
+        if [ "${#IPS[@]}" -eq 0 ]; then
             if [ "$MODE" = "auto" ]; then
-                echo "ℹ️ VM desligada — credenciais não atualizadas."
+                echo "ℹ️ Nenhuma VM em execução — credenciais não atualizadas."
                 exit 0
             fi
-            echo "❌ A VM do FIAP LAB não está em execução. Use 1) Ligar VM."
+            echo "❌ Nenhuma VM do FIAP LAB está em execução. Use 1) Ligar VM."
             exit 1
         fi
 
-        SSH_OPTS=(-o LogLevel=error -o StrictHostKeyChecking=no \
-                  -o UserKnownHostsFile=/dev/null -o ConnectTimeout=8 -i "$KEY")
+        if [ "${#IPS[@]}" -gt 1 ]; then
+            echo ">> Atualizando credenciais em ${#IPS[@]} VMs..."
+        else
+            echo ">> Atualizando credenciais na VM..."
+        fi
 
-        SSH_USER=""
-        for U in ${FIAPLAB_SSH_USER:-} ubuntu ec2-user; do
-            if ssh -o BatchMode=yes "${SSH_OPTS[@]}" "$U@$IP" true 2>/dev/null; then
-                SSH_USER="$U"
-                break
+        OKC=0
+        FAILC=0
+        for IP in "${IPS[@]}"; do
+            if _push_creds_to_vm "$IP"; then
+                OKC=$((OKC + 1))
+            else
+                FAILC=$((FAILC + 1))
             fi
         done
-        if [ -z "$SSH_USER" ]; then
-            echo "❌ Não foi possível conectar por SSH à VM ($IP)."
-            exit 1
-        fi
-        REMOTE_HOME="/home/$SSH_USER"
 
-        # Compara com o que ja esta na VM (informativo).
-        OLD_REMOTE=$(ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" \
-            "cat $REMOTE_HOME/.aws/credentials 2>/dev/null" 2>/dev/null)
-        NEW_LOCAL=$(cat "$CRED_DIR/credentials" 2>/dev/null)
-        if [ -n "$OLD_REMOTE" ] && [ "$OLD_REMOTE" = "$NEW_LOCAL" ]; then
-            echo "ℹ️ O token é o mesmo que já está na VM (mas validado como ativo)."
-        fi
-
-        echo ">> Enviando credenciais para $SSH_USER@$IP ..."
-        ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "mkdir -p $REMOTE_HOME/.aws" || {
-            echo "❌ Falha ao preparar a VM."; exit 1; }
-        scp -q "${SSH_OPTS[@]}" "$CRED_DIR/credentials" \
-            "$SSH_USER@$IP:$REMOTE_HOME/.aws/credentials" || {
-            echo "❌ Falha ao copiar as credenciais."; exit 1; }
-        [ -f "$CRED_DIR/config" ] && scp -q "${SSH_OPTS[@]}" "$CRED_DIR/config" \
-            "$SSH_USER@$IP:$REMOTE_HOME/.aws/config" 2>/dev/null
-        ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "chmod 600 $REMOTE_HOME/.aws/credentials"
-
-        # Valida DENTRO da VM -- mas so se a AWS CLI existir la. O
-        # Terraform le o ~/.aws/credentials direto (via SDK), entao a
-        # ausencia da CLI nao e problema: nesse caso so confirmamos a
-        # copia. Falha real = CLI presente e STS falhando.
-        if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "command -v aws >/dev/null 2>&1"; then
-            if ssh "${SSH_OPTS[@]}" "$SSH_USER@$IP" "aws sts get-caller-identity >/dev/null 2>&1"; then
-                echo "✅ Credenciais atualizadas e validadas na VM."
-            else
-                echo "⚠️ Credenciais copiadas, mas o STS falhou na VM"
-                echo "   (o token pode estar realmente inválido)."
-                exit 1
-            fi
+        if [ "$FAILC" -eq 0 ]; then
+            echo "✅ Credenciais atualizadas em $OKC VM(s)."
         else
-            echo "✅ Credenciais copiadas para a VM."
-            echo "   (A AWS CLI não está instalada na VM; o Terraform usa"
-            echo "    o arquivo ~/.aws/credentials diretamente.)"
+            echo "⚠️ Atualizado em $OKC VM(s); falhou em $FAILC."
         fi
+
+        [ "$FAILC" -eq 0 ]
     )
     return $?
 }
