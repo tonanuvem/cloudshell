@@ -48,6 +48,9 @@ if [ "${#VMS[@]}" -eq 0 ]; then
     echo ""
     echo "Acesso ao FIAP LAB (Code Server): nenhuma VM em execução."
     echo ""
+elif [ "${#VMS[@]}" -eq 1 ]; then
+    # 1 VM: mesmo formato de sempre (só a URL).
+    codeserver_callout "${VMS[0]##*$'\t'}"
 else
     echo ""
     echo "  ${C_BADGE} ABRA O FIAP LAB NO NAVEGADOR ${C_OFF}"
