@@ -834,13 +834,15 @@ fiaplab_running_ip() {
     fiaplab_running_ips | head -1
 }
 
-# "nome<TAB>ip" de cada VM do fiaplab em execucao (uma por linha).
+# "nome<TAB>ip" de cada VM do fiaplab em execucao, ordenado por nome
+# (fiaplab-1 ... fiaplab-9 -- ordem alfabetica = numerica com 1 digito,
+# e a conta do lab tem no maximo 9 instancias).
 fiaplab_running_name_ip() {
     aws ec2 describe-instances \
         --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
                   "Name=instance-state-name,Values=running" \
         --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,PublicIpAddress]' \
-        --output text 2>/dev/null | grep -vE '^[[:space:]]*$'
+        --output text 2>/dev/null | grep -vE '^[[:space:]]*$' | sort -t"$(printf '\t')" -k1,1
 }
 
 vm_start() {
