@@ -155,40 +155,8 @@ echo ""
 
 echo ">> Verificando bucket S3..."
 
-if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
-
-    echo "   Bucket já existe."
-
-else
-
-    echo "   Criando bucket..."
-
-    if [ "$AWS_REGION" = "us-east-1" ]; then
-
-        aws s3api create-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region "$AWS_REGION"
-
-    else
-
-        aws s3api create-bucket \
-            --bucket "$BUCKET_NAME" \
-            --region "$AWS_REGION" \
-            --create-bucket-configuration \
-            LocationConstraint="$AWS_REGION"
-
-    fi
-
-    RC=$?
-
-    if [ "$RC" -ne 0 ]; then
-        echo ""
-        echo "❌ Não foi possível criar o bucket de state:"
-        echo "   $BUCKET_NAME"
-        echo ""
-        exit "$RC"
-    fi
-fi
+# Mesma garantia usada pelo tf_init (criar/destruir/etc).
+ensure_state_bucket || exit 1
 
 # ============================================================
 # 8. DYNAMODB LOCK - DESCONTINUADO

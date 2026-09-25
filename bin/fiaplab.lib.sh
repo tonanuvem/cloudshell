@@ -535,12 +535,59 @@ prepare_tools_tf() {
 # required" ate ele rodar "Criar infraestrutura" de novo.
 # ============================================================
 
+# ============================================================
+# ensure_state_bucket : garante o bucket de state S3 (idempotente)
+#
+# Antes so o init.sh criava o bucket. Mas o backend do Terraform
+# aponta para ele em toda operacao, entao rodar criar.sh/destruir
+# sem ter rodado o init.sh (caso do instrutor) -- ou depois da
+# Limpeza geral, que apaga o bucket -- falhava com "S3 bucket ...
+# does not exist". Agora o tf_init garante o bucket sozinho.
+# ============================================================
+
+ensure_state_bucket() {
+
+    [ -n "$BUCKET_NAME" ] || get_account_id || return 1
+
+    if aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
+        return 0
+    fi
+
+    echo ">> Criando bucket de state S3 ($BUCKET_NAME)..."
+
+    if [ "$AWS_REGION" = "us-east-1" ]; then
+        aws s3api create-bucket --bucket "$BUCKET_NAME" \
+            --region "$AWS_REGION" >/dev/null 2>&1
+    else
+        aws s3api create-bucket --bucket "$BUCKET_NAME" \
+            --region "$AWS_REGION" \
+            --create-bucket-configuration LocationConstraint="$AWS_REGION" >/dev/null 2>&1
+    fi
+
+    # Aguarda o bucket ficar disponivel (consistencia eventual do S3);
+    # tambem cobre a corrida "ja existe / recem-criado".
+    local i=0
+    while [ "$i" -lt 10 ]; do
+        aws s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1 && return 0
+        sleep 2
+        i=$((i + 1))
+    done
+
+    echo "❌ Não foi possível criar/confirmar o bucket de state:"
+    echo "   $BUCKET_NAME"
+    return 1
+}
+
+
 tf_init() {
 
     local PROJECT="$1"
     local TF_DIR="$CONFIG_DIR/$PROJECT"
 
     [ -n "$BUCKET_NAME" ] || get_account_id || return 1
+
+    # Garante o bucket antes de configurar o backend.
+    ensure_state_bucket || return 1
 
     local -a BC=(
         -backend-config="bucket=$BUCKET_NAME"
