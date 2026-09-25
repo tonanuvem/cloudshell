@@ -78,12 +78,40 @@ if ! [[ "$QTD" =~ ^[0-9]+$ ]] || [ "$QTD" -lt 1 ] || [ "$QTD" -gt "$DISPONIVEL" 
     exit 1
 fi
 
+# ------------------------------------------------------------
+# Sufixo do nome (variavel ec2_name do Terraform)
+#
+# O nome fica: <prefixo>-<N>-<sufixo>  (ex.: fiaplab-1-homolog).
+# O prefixo (fiaplab) e o numero sao mantidos: o numero garante
+# nomes unicos com varias VMs e o prefixo faz o menu encontra-las
+# (filtro fiaplab-*). Default do sufixo: "aluno".
+# ------------------------------------------------------------
+
+PREFIXO="${FIAPLAB_NAME_FILTER%-*}"
+SUFIXO="aluno"
+
 echo ""
-read -rp "Confirma criar $QTD VM(s) de $PROJETO? (s/N): " CONFIRMA
+read -rp "Definir um sufixo de nome customizado? (s/N): " RESP_SUF
+
+if [[ "$RESP_SUF" =~ ^[Ss]$ ]]; then
+    read -rp "Sufixo (letras/números/hífen; ex.: homolog, turma1): " S
+    if [[ "$S" =~ ^[A-Za-z0-9-]{1,20}$ ]]; then
+        SUFIXO="$S"
+    else
+        echo ""
+        echo "❌ Sufixo inválido (use letras, números ou hífen; até 20 caracteres)."
+        exit 1
+    fi
+fi
+
+echo ""
+echo "Nomes: ${PREFIXO}-1-${SUFIXO} … ${PREFIXO}-${QTD}-${SUFIXO}"
+echo ""
+read -rp "Confirma criar $QTD VM(s)? (s/N): " CONFIRMA
 [[ "$CONFIRMA" =~ ^[Ss]$ ]] || { echo "Cancelado."; exit 0; }
 
 echo ""
-echo ">> Criando $QTD VM(s) de $PROJETO..."
+echo ">> Criando $QTD VM(s) (${PREFIXO}-N-${SUFIXO})..."
 echo ""
 
-TF_VAR_quantidade="$QTD" "$BIN_DIR/criar.sh" "$PROJETO"
+TF_VAR_quantidade="$QTD" TF_VAR_ec2_name="$SUFIXO" "$BIN_DIR/criar.sh" "$PROJETO"
