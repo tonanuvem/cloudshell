@@ -29,6 +29,14 @@ aws_require || exit 1
 
 tf_ensure_init "$PROJECT" || exit 1
 
+# Atualiza os IPs no state antes de montar o inventario. Apos
+# suspender/religar, a VM ganha novo IP publico; o ajustar.sh (e o
+# inventario do fallback) leem "terraform output", que ficaria com o
+# IP obsoleto -> "Connection timed out". "apply -refresh-only" so
+# sincroniza o state, nao altera a infraestrutura.
+echo ">> Atualizando IPs da(s) VM(s)..."
+terraform -chdir="$TF_DIR" apply -refresh-only -auto-approve -input=false >/dev/null 2>&1
+
 echo ""
 echo "========================================"
 echo " ANSIBLE"
