@@ -7,11 +7,16 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BIN_DIR/fiaplab.lib.sh"
 
 PROJECT="$1"
+SUFIXO="$2"   # opcional: nome do lote (state proprio + tag fiaplab-N-<sufixo>)
 
 if [ -z "$PROJECT" ]; then
-    echo "Uso: ~/criar.sh <projeto>"
+    echo "Uso: ~/criar.sh <projeto> [sufixo]"
     exit 1
 fi
+
+# Com sufixo, as VMs recebem esse ec2_name (tag fiaplab-N-<sufixo>) e o
+# state fica isolado por lote. Sem sufixo, mantem o padrao (aluno).
+[ -n "$SUFIXO" ] && export TF_VAR_ec2_name="$SUFIXO"
 
 TF_DIR="$CONFIG_DIR/$PROJECT"
 
@@ -39,13 +44,14 @@ if ! get_account_id; then
     exit 1
 fi
 
-TFSTATE_KEY="${PROJECT}/terraform.tfstate"
+TFSTATE_KEY="$(tf_state_key "$PROJECT" "$SUFIXO")"
 
 echo ""
 echo "========================================"
 echo " CRIAR INFRAESTRUTURA"
 echo "========================================"
 echo "Projeto : $PROJECT"
+echo "Lote    : ${SUFIXO:-(padrão)}"
 echo "Diretório: $TF_DIR"
 echo "State   : s3://$BUCKET_NAME/$TFSTATE_KEY"
 echo ""
@@ -72,7 +78,7 @@ fi
 
 echo ">> Terraform init..."
 
-tf_init "$PROJECT"
+tf_init "$PROJECT" "$SUFIXO"
 
 RC=$?
 

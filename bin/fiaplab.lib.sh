@@ -579,9 +579,22 @@ ensure_state_bucket() {
 }
 
 
+# Key do state no S3 para um projeto/lote. Sem sufixo = lote padrao
+# (compatibilidade com o init.sh). Com sufixo = lote proprio, permitindo
+# varios lotes coexistirem, cada um com sua VPC/instancias.
+tf_state_key() {
+    local PROJECT="$1" SUFIXO="$2"
+    if [ -n "$SUFIXO" ]; then
+        echo "${PROJECT}/${SUFIXO}/terraform.tfstate"
+    else
+        echo "${PROJECT}/terraform.tfstate"
+    fi
+}
+
 tf_init() {
 
     local PROJECT="$1"
+    local SUFIXO="$2"
     local TF_DIR="$CONFIG_DIR/$PROJECT"
 
     [ -n "$BUCKET_NAME" ] || get_account_id || return 1
@@ -591,7 +604,7 @@ tf_init() {
 
     local -a BC=(
         -backend-config="bucket=$BUCKET_NAME"
-        -backend-config="key=${PROJECT}/terraform.tfstate"
+        -backend-config="key=$(tf_state_key "$PROJECT" "$SUFIXO")"
         -backend-config="region=$AWS_REGION"
         -backend-config="use_lockfile=true"
     )

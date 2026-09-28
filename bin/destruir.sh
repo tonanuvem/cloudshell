@@ -7,9 +7,10 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BIN_DIR/fiaplab.lib.sh"
 
 PROJECT="$1"
+SUFIXO="$2"   # opcional: nome do lote (state proprio)
 
 if [ -z "$PROJECT" ]; then
-    echo "Uso: ~/destruir.sh <projeto>"
+    echo "Uso: ~/destruir.sh <projeto> [sufixo]"
     exit 1
 fi
 
@@ -33,13 +34,14 @@ if ! get_account_id; then
     exit 1
 fi
 
-TFSTATE_KEY="${PROJECT}/terraform.tfstate"
+TFSTATE_KEY="$(tf_state_key "$PROJECT" "$SUFIXO")"
 
 echo ""
 echo "========================================"
 echo " DESTRUIR INFRAESTRUTURA"
 echo "========================================"
 echo "Projeto : $PROJECT"
+echo "Lote    : ${SUFIXO:-(padrão)}"
 echo "State   : s3://$BUCKET_NAME/$TFSTATE_KEY"
 echo ""
 
@@ -55,7 +57,7 @@ fi
 
 echo ">> Terraform init..."
 
-tf_init "$PROJECT"
+tf_init "$PROJECT" "$SUFIXO"
 
 RC=$?
 
