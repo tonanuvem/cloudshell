@@ -48,6 +48,17 @@ if [ "${#VMS[@]}" -eq 0 ]; then
     echo ""
     echo "Acesso ao FIAP LAB (Code Server): nenhuma VM em execução."
     echo ""
+    # Oferece ligar usando a MESMA funcao da opcao 1 do menu (vm_start).
+    read -rp "Deseja ligar a(s) VM(s) agora? (s/N): " RESP_LIGAR
+    if [[ "$RESP_LIGAR" =~ ^[Ss]$ ]] && aws_require; then
+        echo ""
+        echo "========================================"
+        echo " LIGAR VM"
+        echo "========================================"
+        vm_start
+        echo ""
+        echo "Aguarde ~30s e rode  ./ip  novamente para ver as URLs."
+    fi
 elif [ "${#VMS[@]}" -eq 1 ]; then
     # 1 VM: mesmo formato de sempre (só a URL).
     codeserver_callout "${VMS[0]##*$'\t'}"
@@ -70,7 +81,11 @@ fi
 
 # ------------------------------------------------------------
 # Atualiza as credenciais da VM (best-effort, sem prompt).
+# Só quando ha VM em execucao: VMs recem-ligadas acima ainda estao
+# em "pending" (sem IP), e o aluno roda ./ip de novo quando subirem.
 # ------------------------------------------------------------
 
-echo ">> Atualizando credenciais da VM..."
-refresh_vm_credentials auto
+if [ "${#VMS[@]}" -gt 0 ]; then
+    echo ">> Atualizando credenciais da VM..."
+    refresh_vm_credentials auto
+fi
