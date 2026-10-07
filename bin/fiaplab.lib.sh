@@ -231,22 +231,53 @@ aws_write_credentials_file() {
 
 
 # ============================================================
+# _sts_ok : STS valido, com retry curto (item 2)
+#
+# Chamado no topo de quase tudo. No caminho feliz a 1a tentativa
+# retorna na hora (custo zero). As tentativas extras (2s entre
+# elas) so ocorrem quando o STS falha -- absorvem o aquecimento de
+# poucos segundos do endpoint de credenciais logo apos abrir o
+# CloudShell. Em credencial realmente vencida, apenas atrasa um
+# pouco antes de desistir.
+# ============================================================
+
+_sts_ok() {
+
+    local tries="${1:-1}" n=0
+
+    while :; do
+        aws sts get-caller-identity >/dev/null 2>&1 && return 0
+        n=$((n + 1))
+        [ "$n" -ge "$tries" ] && return 1
+        sleep 2
+    done
+}
+
+
+# ============================================================
 # aws_login : garante credencial valida AGORA
 #
 # O CloudShell expoe um provedor de credenciais que se renova
 # sozinho (AWS_CONTAINER_CREDENTIALS_FULL_URI). Os scripts
-# antigos exportavam AWS_SHARED_CREDENTIALS_FILE apontando para
-# um snapshot gravado la no init.sh -- e como o arquivo tem
-# precedencia sobre o provedor nativo, isso DESLIGAVA a renovacao
-# automatica e produzia o ExpiredToken depois de algum tempo.
+# antigos (run.sh/credenciais.sh) gravavam ~/.aws/credentials no
+# $HOME -- que PERSISTE entre End Lab / Start Lab. Como o arquivo
+# compartilhado no caminho PADRAO (~/.aws/credentials) tem
+# precedencia sobre o provedor de container, um token vencido la
+# "ganha" da credencial fresca e produz ExpiredToken em TODA
+# sessao (e no meio de um apply longo).
+#
+# Um simples "unset AWS_SHARED_CREDENTIALS_FILE" NAO resolve: sem a
+# variavel, o SDK volta a ler o ~/.aws/credentials padrao. Por isso
+# apontamos a variavel para /dev/null (arquivo compartilhado vazio)
+# quando ha provedor de container -- assim o ~/.aws/credentials
+# padrao nunca e lido e a cadeia usa o container, que se renova
+# sozinho (inclusive no meio do "terraform apply", que herda este
+# ambiente).
 #
 # Ordem adotada aqui:
 #
-#   1) provedor nativo do CloudShell   (renova sozinho)
-#   2) arquivo estatico recem-gerado   (fallback)
-#
-# Assim um "terraform apply" longo renova a credencial no meio
-# do caminho, coisa que o arquivo estatico nunca faria.
+#   1) provedor de container do CloudShell  (renova sozinho)
+#   2) arquivo estatico recem-gerado        (fallback)
 # ============================================================
 
 aws_login() {
@@ -261,22 +292,25 @@ aws_login() {
         export AWS_CONFIG_FILE="$CRED_DIR/config"
     fi
 
-    # 1) Provedor nativo: nao fixar arquivo.
+    # 1) Provedor de container: neutraliza um ~/.aws/credentials
+    #    estatico (de versoes antigas) apontando o arquivo
+    #    compartilhado para /dev/null -- so "unset" nao basta.
     if [ -n "$AWS_CONTAINER_CREDENTIALS_FULL_URI" ]; then
 
-        unset AWS_SHARED_CREDENTIALS_FILE
+        export AWS_SHARED_CREDENTIALS_FILE=/dev/null
 
-        if aws sts get-caller-identity >/dev/null 2>&1; then
+        if _sts_ok 3; then
             return 0
         fi
     fi
 
-    # 2) Fallback: arquivo estatico.
+    # 2) Fallback: arquivo estatico (token congelado; sem retry,
+    #    pois repetir nao revive um token vencido).
     if [ -f "$CRED_DIR/credentials" ]; then
 
         export AWS_SHARED_CREDENTIALS_FILE="$CRED_DIR/credentials"
 
-        if aws sts get-caller-identity >/dev/null 2>&1; then
+        if _sts_ok 1; then
             return 0
         fi
     fi
