@@ -49,8 +49,9 @@ if [ "${#VMS[@]}" -eq 0 ]; then
     echo "Acesso ao FIAP LAB (Code Server): nenhuma VM em execução."
     echo ""
     # Oferece ligar usando a MESMA funcao da opcao 1 do menu (vm_start).
-    read -rp "Deseja ligar a(s) VM(s) agora? (s/N): " RESP_LIGAR
-    if [[ "$RESP_LIGAR" =~ ^[Ss]$ ]] && aws_require; then
+    # Padrao SIM: so apertar ENTER ja liga.
+    read -rp "Deseja ligar a(s) VM(s) agora? (S/n): " RESP_LIGAR
+    if [[ ! "$RESP_LIGAR" =~ ^[Nn]$ ]] && aws_require; then
         echo ""
         echo "========================================"
         echo " LIGAR VM"
