@@ -175,6 +175,61 @@ repo_pull() {
 
 
 # ============================================================
+# repos_update : atualiza os dois repos e, se este andou, re-executa
+#
+# Uso, no topo do comando e logo apos o source da lib:
+#
+#     repos_update "$BIN_DIR/ip" "$@"
+#
+# Ordem importa:
+#
+#   1. config -- nao e codigo em execucao, atualiza sem risco.
+#   2. cloudshell -- o script chamador esta rodando, e o bash le o
+#      arquivo em pedacos: reescreve-lo no meio da execucao quebra o
+#      resto. Entao, se o HEAD andou, re-executamos o comando ja na
+#      versao nova (uma vez so, guardado por FIAPLAB_REEXEC) -- e
+#      nesse caso esta funcao NAO retorna.
+#
+# O lancador no $HOME (gerado pelo comandos.sh) ja atualiza o
+# cloudshell antes do exec e avisa com FIAPLAB_REPO_PULLED=1, para
+# nao pagarmos o mesmo pull duas vezes.
+#
+# Desative com FIAPLAB_NO_UPDATE=1.
+# ============================================================
+
+repos_update() {
+
+    local CMD="$1"
+    shift
+
+    [ -z "$FIAPLAB_NO_UPDATE" ] || return 0
+    [ -z "$FIAPLAB_REEXEC" ]    || return 0
+
+    echo ""
+    echo ">> Atualizando repositórios do lab..."
+
+    repo_pull "$CONFIG_DIR" "config"
+
+    # Lancador ja puxou este repo: nada a fazer aqui.
+    [ -z "$FIAPLAB_REPO_PULLED" ] || return 0
+
+    local REPO_DIR
+    REPO_DIR="$(cd "$(dirname "$CMD")/.." 2>/dev/null && pwd)"
+
+    [ -n "$REPO_DIR" ] || return 0
+
+    repo_pull "$REPO_DIR" "cloudshell"
+
+    if [ "$?" -eq 10 ] && [ -x "$CMD" ]; then
+        export FIAPLAB_REEXEC=1
+        exec "$CMD" "$@"
+    fi
+
+    return 0
+}
+
+
+# ============================================================
 # reset_known_hosts : evita "Host key verification failed"
 #
 # As VMs do lab sao recriadas reaproveitando IPs publicos, e o

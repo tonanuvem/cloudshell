@@ -169,6 +169,14 @@ destruir_ou_refazer() {
 # INICIALIZACAO
 # ============================================================
 
+# Mantem os dois repos do lab em dia antes de abrir o menu: o config
+# (playbooks, .tf, ajustar.sh de cada projeto) e este (bin/). Sem o
+# config aqui, uma correcao de playbook so chegava ao aluno rodando o
+# init.sh de novo -- e as acoes do menu (criar/refazer/credenciais)
+# usam justamente o ajustar.sh do config. Detalhes e variaveis:
+# repos_update na lib.
+repos_update "$BIN_DIR/fiaplab.sh" "$@"
+
 # Boot leve: so prepara o /tmp (rapido). Terraform e Ansible sao
 # instalados sob demanda pelas acoes que precisam (criar/destruir/
 # refazer), para abrir o menu nao esperar download a cada sessao.

@@ -42,9 +42,9 @@ done
 # quebrar e o comando roda com a versao atual.
 #
 # O repo config (~/environment/config: .tf, playbooks, ajustar.sh)
-# nao e atualizado aqui: quem cuida dele e o proprio bin/ip, via
-# repo_pull da lib, porque nao e codigo em execucao e pode ser
-# atualizado com o comando ja rodando.
+# nao e atualizado aqui: quem cuida dele e o repos_update da lib,
+# chamado pelo bin/ip e pelo bin/fiaplab.sh, porque nao e codigo em
+# execucao e pode ser atualizado com o comando ja rodando.
 #
 # Desative o update com FIAPLAB_NO_UPDATE=1.
 # ------------------------------------------------------------
