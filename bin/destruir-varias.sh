@@ -33,22 +33,8 @@ fi
 # Lista os lotes a partir dos states no S3
 # ------------------------------------------------------------
 
-mapfile -t KEYS < <(aws s3api list-objects-v2 \
-    --bucket "$BUCKET_NAME" --prefix "$PROJETO/" \
-    --query 'Contents[].Key' --output text 2>/dev/null \
-    | tr '\t' '\n' | grep -v '^$')
-
-LOTES=()
-for KEY in "${KEYS[@]}"; do
-    case "$KEY" in
-        "$PROJETO"/terraform.tfstate)
-            LOTES+=("") ;;                                  # lote padrao
-        "$PROJETO"/*/terraform.tfstate)
-            S="${KEY#"$PROJETO"/}"
-            LOTES+=("${S%/terraform.tfstate}") ;;
-        *) continue ;;                                      # .tflock etc
-    esac
-done
+# mapfile (e nao $(...)) porque o lote padrao vem como linha vazia.
+mapfile -t LOTES < <(tf_list_batches "$PROJETO")
 
 if [ "${#LOTES[@]}" -eq 0 ]; then
     echo "Nenhum lote encontrado (nenhum state em $PROJETO/ no S3)."

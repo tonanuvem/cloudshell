@@ -708,6 +708,44 @@ tf_run_unlock() {
 
 
 # ============================================================
+# tf_list_batches : lista os lotes do projeto a partir do S3
+#
+# Cada lote criado pelo criar-varias.sh com sufixo tem state
+# proprio (<projeto>/<sufixo>/terraform.tfstate); o lote padrao
+# fica em <projeto>/terraform.tfstate. Imprime um lote por linha
+# -- o lote padrao como linha VAZIA -- entao leia sempre com
+# "mapfile -t" (um $(...) descartaria a linha vazia).
+#
+# Esta listagem estava copiada dentro do destruir-varias.sh; o
+# ajustar-varias.sh precisa dela tambem, por isso virou funcao.
+# ============================================================
+
+tf_list_batches() {
+
+    local PROJECT="$1"
+    local KEY S
+
+    [ -n "$BUCKET_NAME" ] || get_account_id || return 1
+
+    while IFS= read -r KEY; do
+        case "$KEY" in
+            "$PROJECT"/terraform.tfstate)
+                echo "" ;;                                  # lote padrao
+            "$PROJECT"/*/terraform.tfstate)
+                S="${KEY#"$PROJECT"/}"
+                echo "${S%/terraform.tfstate}" ;;
+            *) continue ;;                                  # .tflock etc
+        esac
+    done < <(
+        aws s3api list-objects-v2 \
+            --bucket "$BUCKET_NAME" --prefix "$PROJECT/" \
+            --query 'Contents[].Key' --output text 2>/dev/null |
+        tr '\t' '\n' | grep -v '^$'
+    )
+}
+
+
+# ============================================================
 # INSTANCIAS DO STATE
 #
 # Le os IDs direto do state. Os scripts antigos rodavam
