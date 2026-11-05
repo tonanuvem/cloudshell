@@ -41,6 +41,11 @@ done
 # GitHub fora do ar ou com edicoes locais no clone, o pull falha sem
 # quebrar e o comando roda com a versao atual.
 #
+# O repo config (~/environment/config: .tf, playbooks, ajustar.sh)
+# nao e atualizado aqui: quem cuida dele e o proprio bin/ip, via
+# repo_pull da lib, porque nao e codigo em execucao e pode ser
+# atualizado com o comando ja rodando.
+#
 # Desative o update com FIAPLAB_NO_UPDATE=1.
 # ------------------------------------------------------------
 
@@ -69,6 +74,9 @@ if [ -z "\$FIAPLAB_NO_UPDATE" ] && [ -d "\$REPO/.git" ]; then
     else
         git -C "\$REPO" pull --ff-only --quiet 2>/dev/null
     fi
+    # Avisa o comando em bin/ que o cloudshell ja esta em dia: o ip
+    # atualiza os dois repos e, sem isto, pagaria este pull de novo.
+    export FIAPLAB_REPO_PULLED=1
 fi
 exec "\$BIN" "\$@"
 LAUNCH

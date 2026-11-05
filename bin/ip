@@ -15,8 +15,54 @@
 # ============================================================
 
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$BIN_DIR/.." && pwd)"
 
 source "$BIN_DIR/fiaplab.lib.sh"
+
+# ------------------------------------------------------------
+# ATUALIZA OS DOIS REPOSITORIOS DO LAB
+#
+# O "./ip" e o comando que o aluno repete o tempo todo (pegar a
+# URL do code-server), entao e o melhor lugar para manter os dois
+# clones em dia: o config (playbooks, .tf, ajustar.sh) e este
+# repo (bin/). Antes, o config so era atualizado pelo init.sh e o
+# cloudshell so pelo lancador ~/ip -- quem roda "./ip" do bin/
+# nao atualizava nenhum dos dois.
+#
+# Ordem importa:
+#
+#   1. config  -- nao e codigo em execucao, atualiza sem risco.
+#   2. cloudshell -- este arquivo esta rodando; o bash le o script
+#      em pedacos, e reescreve-lo no meio da execucao quebra o
+#      resto. Entao, se o HEAD andou, re-executamos o comando ja
+#      na versao nova (uma vez so, guardado por FIAPLAB_REEXEC).
+#
+# O lancador ~/ip (gerado pelo comandos.sh) ja atualiza o
+# cloudshell antes do exec e avisa com FIAPLAB_REPO_PULLED=1,
+# para nao pagarmos o pull duas vezes.
+#
+# Desative com FIAPLAB_NO_UPDATE=1.
+# ------------------------------------------------------------
+
+# FIAPLAB_REEXEC: ja viemos de um exec logo apos o pull, entao os
+# dois repos acabaram de ser atualizados -- nao repete nem o aviso.
+if [ -z "$FIAPLAB_NO_UPDATE" ] && [ -z "$FIAPLAB_REEXEC" ]; then
+
+    echo ""
+    echo ">> Atualizando repositórios do lab..."
+
+    repo_pull "$CONFIG_DIR" "config"
+
+    if [ -z "$FIAPLAB_REPO_PULLED" ]; then
+
+        repo_pull "$REPO_DIR" "cloudshell"
+
+        if [ "$?" -eq 10 ]; then
+            export FIAPLAB_REEXEC=1
+            exec "$BIN_DIR/ip" "$@"
+        fi
+    fi
+fi
 
 aws_require || exit 1
 

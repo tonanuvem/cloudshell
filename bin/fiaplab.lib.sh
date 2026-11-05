@@ -121,6 +121,60 @@ cfg_set() {
 
 
 # ============================================================
+# REPOSITORIOS DO LAB
+#
+# Sao dois, e os dois mudam durante o semestre:
+#
+#   cloudshell  este repo (bin/, a lib) -- clonado onde o aluno
+#               escolheu, normalmente ~/cloudshell
+#   config      ~/environment/config: os .tf dos projetos, os
+#               playbooks e o ajustar.sh de cada projeto
+#
+# Antes, so o lancador ~/fiaplab.sh (gerado pelo comandos.sh)
+# atualizava o cloudshell, e o config era atualizado unicamente
+# pelo init.sh -- ou seja, playbook corrigido no config nao
+# chegava ao aluno sem rodar o init de novo. E quem roda "./ip"
+# direto do bin/, sem o lancador, nao atualizava nada.
+#
+# repo_pull e best-effort de proposito: com timeout, silencioso e
+# --ff-only. Sem rede, com GitHub fora do ar ou com edicoes locais
+# no clone, o pull falha sem quebrar o comando que o chamou.
+#
+# Codigo de retorno:  0 = nada mudou (ou nao deu para atualizar)
+#                    10 = o HEAD andou (o chamador pode re-executar)
+#
+# Desative tudo com FIAPLAB_NO_UPDATE=1.
+# ============================================================
+
+repo_pull() {
+
+    local DIR="$1"
+    local LABEL="${2:-$(basename "$DIR")}"
+    local ANTES DEPOIS
+
+    [ -z "$FIAPLAB_NO_UPDATE" ] || return 0
+    [ -d "$DIR/.git" ]          || return 0
+
+    ANTES=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 15 git -C "$DIR" pull --ff-only --quiet 2>/dev/null
+    else
+        git -C "$DIR" pull --ff-only --quiet 2>/dev/null
+    fi
+
+    DEPOIS=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+
+    [ -n "$ANTES" ] && [ -n "$DEPOIS" ] || return 0
+    [ "$ANTES" != "$DEPOIS" ]           || return 0
+
+    echo "   ✅ $LABEL atualizado ($(git -C "$DIR" log -1 --format=%h 2>/dev/null))"
+
+    return 10
+}
+
+
+# ============================================================
 # reset_known_hosts : evita "Host key verification failed"
 #
 # As VMs do lab sao recriadas reaproveitando IPs publicos, e o
