@@ -1326,6 +1326,96 @@ tf_pick_batch() {
 
 
 # ============================================================
+# tf_pick_instance : escolhe UMA instancia do state do lote
+#
+# Le as instancias do state (ja inicializado no lote desejado) com
+# indice, nome e IP, e deixa escolher uma. O indice e o que o
+# Terraform entende: "aws_instance.web[2]" para o -replace.
+#
+# No ubuntu-vm o recurso e "aws_instance.web" com count, e a tag
+# Name e "<prefixo>-<index+1>-<lote>" (main.tf do repo config), por
+# isso o indice 2 aparece como fiaplab-3-<lote>. O endereco vem do
+# proprio state (.address), nao montado a mao, para funcionar tambem
+# em projetos com outro nome de recurso.
+#
+# Define TF_PICK_ADDRESS / TF_PICK_NAME / TF_PICK_IP / TF_PICK_INDEX.
+# Retorna 1 se cancelou ou se o state nao tem instancia.
+# ============================================================
+
+TF_PICK_ADDRESS=""
+TF_PICK_NAME=""
+TF_PICK_IP=""
+TF_PICK_INDEX=""
+
+tf_pick_instance() {
+
+    local PROJECT="$1"
+    local TF_DIR="$CONFIG_DIR/$PROJECT"
+    local ESC i IDX NAME IP ADDR
+    local -a IDXS=() NAMES=() IPS=() ADDRS=()
+
+    TF_PICK_ADDRESS=""
+    TF_PICK_NAME=""
+    TF_PICK_IP=""
+    TF_PICK_INDEX=""
+
+    while IFS=$'\t' read -r IDX NAME IP ADDR; do
+        [ -n "$ADDR" ] || continue
+        IDXS+=("$IDX")
+        NAMES+=("$NAME")
+        IPS+=("$IP")
+        ADDRS+=("$ADDR")
+    done < <(
+        terraform -chdir="$TF_DIR" show -json 2>/dev/null |
+        jq -r '.. | objects | select(.type? == "aws_instance") |
+               [ (.index // 0),
+                 (.values.tags.Name // "?"),
+                 (.values.public_ip // "-"),
+                 (.address // "aws_instance.\(.name)[\(.index // 0)]") ] | @tsv' \
+            2>/dev/null |
+        sort -t"$(printf '\t')" -k1,1n
+    )
+
+    if [ "${#ADDRS[@]}" -eq 0 ]; then
+        echo "❌ Nenhuma instância no state deste lote." >&2
+        return 1
+    fi
+
+    {
+        echo ""
+        echo "VMs deste lote (${#ADDRS[@]}):"
+        echo ""
+        for i in "${!ADDRS[@]}"; do
+            printf '  %d) %-22s %-16s %s\n' \
+                "$((i + 1))" "${NAMES[$i]}" "${IPS[$i]}" "${ADDRS[$i]}"
+        done
+        echo ""
+        echo "  C) Cancelar"
+        echo ""
+    } >&2
+
+    read -rp "Refazer qual VM? [1-${#ADDRS[@]}]: " ESC
+
+    if [[ "$ESC" =~ ^[0-9]+$ ]] &&
+       [ "$ESC" -ge 1 ] && [ "$ESC" -le "${#ADDRS[@]}" ]; then
+        i=$((ESC - 1))
+        TF_PICK_ADDRESS="${ADDRS[$i]}"
+        TF_PICK_NAME="${NAMES[$i]}"
+        TF_PICK_IP="${IPS[$i]}"
+        TF_PICK_INDEX="${IDXS[$i]}"
+        return 0
+    fi
+
+    case "$ESC" in
+        [Cc]|"") echo "Cancelado." >&2 ;;
+        *)       echo "❌ Opção inválida." >&2 ;;
+    esac
+
+    return 1
+}
+
+
+# ============================================================
 # tf_batch_size : quantas instancias o state do lote tem
 #
 # O Refazer precisa disto: o criar.sh sem TF_VAR_quantidade cria

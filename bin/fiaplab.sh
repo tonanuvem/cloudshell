@@ -80,6 +80,7 @@ destruir_ou_refazer() {
     echo ""
     echo " D) Destruir      - remove a VM e a infraestrutura (não recria)"
     echo " R) Refazer       - destrói e recria o ambiente do zero"
+    echo " V) Refazer 1 VM  - recria só uma VM do lote (as outras ficam)"
     echo " L) Limpeza geral - ⚠️ remove TODOS os recursos do lab na conta"
     echo " C) Cancelar"
     echo ""
@@ -87,7 +88,7 @@ destruir_ou_refazer() {
     local OP CONFIRMA RC LOTE QTD_LOTE
     local -a LOTES_D=()
 
-    read -rp "Escolha [D/R/L/C]: " OP
+    read -rp "Escolha [D/R/V/L/C]: " OP
 
     case "$OP" in
 
@@ -170,6 +171,14 @@ destruir_ou_refazer() {
             fi
 
             return "$RC"
+            ;;
+
+        [Vv])
+            # Cirurgico: terraform apply -replace numa instancia so.
+            # O refazer-vm.sh escolhe lote e VM, recria e reconfigura
+            # apenas ela -- as outras VMs do lote nem reiniciam.
+            "$BIN_DIR/refazer-vm.sh" "$CURRENT_PROJECT"
+            return $?
             ;;
 
         [Ll])
