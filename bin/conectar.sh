@@ -7,19 +7,33 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$BIN_DIR/fiaplab.lib.sh"
 
 PROJECT="$1"
-NODENUM="${2:-1}"
+ALVO="$2"      # numero da VM, IP, ou vazio (escolhe/descobre)
 
 if [ -z "$PROJECT" ]; then
     echo "Uso:"
-    echo "  ~/conectar.sh <projeto> <numero>"
+    echo "  ~/conectar.sh <projeto> [numero|IP]"
     echo ""
-    echo "Exemplo:"
+    echo "Exemplos:"
     echo "  ~/conectar.sh cluster 3"
+    echo "  ~/conectar.sh ubuntu-vm 54.1.2.3"
+    echo ""
+    echo "Sem o 2o argumento: com uma VM conecta nela; com várias,"
+    echo "pergunta em qual."
     exit 1
 fi
 
-if ! [[ "$NODENUM" =~ ^[0-9]+$ ]] || [ "$NODENUM" -lt 1 ]; then
-    echo "❌ Número da VM inválido."
+# Um IP como 2o argumento vai direto: e assim que o menu manda a VM
+# escolhida no vm_pick, sem ter de traduzir nome em "numero do no"
+# (que so existe para projetos multi-node lidos do state).
+NODENUM=""
+IP_ARG=""
+
+if [[ "$ALVO" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+    IP_ARG="$ALVO"
+elif [[ "$ALVO" =~ ^[0-9]+$ ]] && [ "$ALVO" -ge 1 ]; then
+    NODENUM="$ALVO"
+elif [ -n "$ALVO" ]; then
+    echo "❌ Argumento inválido: $ALVO (use o número da VM ou o IP)."
     exit 1
 fi
 
@@ -48,11 +62,27 @@ echo ""
 echo "Conectando ao projeto: $PROJECT"
 echo ""
 
+# --- IP vindo pronto no argumento ---
+IP="$IP_ARG"
+
+# --- Sem argumento: escolhe entre as VMs do lab em execucao ---
+# Antes, o menu chamava sempre com o no 1 e o aluno com varias VMs
+# (lotes do criar-varias.sh) so conseguia entrar na primeira. Com uma
+# VM so, o vm_pick nao pergunta nada -- o comportamento de sempre.
+if [ -z "$IP" ] && [ -z "$NODENUM" ]; then
+    if vm_pick "Conectar em" running ""; then
+        IP="${VM_PICK_IPS[0]}"
+        echo ""
+        echo "VM: ${VM_PICK_NAMES[0]}"
+    else
+        exit 1
+    fi
+fi
+
 # --- Caminho rapido: IP da VM do fiaplab via AWS CLI ---
 # Evita instalar/inicializar o Terraform so para descobrir o IP (o
 # menu ja mostrou esse IP). So vale para a VM unica do fiaplab (node 1).
-IP=""
-if [ "$NODENUM" -eq 1 ]; then
+if [ -z "$IP" ] && [ "$NODENUM" = "1" ]; then
     IP=$(fiaplab_running_ip)
 fi
 
@@ -62,7 +92,7 @@ if [ -z "$IP" ] || [ "$IP" = "None" ]; then
     prepare_tools_tf || exit 1
     tf_ensure_init "$PROJECT" || exit 1
     mapfile -t IPS < <(ec2_public_ips "$PROJECT" | grep -v '^[[:space:]]*$')
-    IP="${IPS[$((NODENUM - 1))]}"
+    IP="${IPS[$((${NODENUM:-1} - 1))]}"
 fi
 
 if [ ! -f "$CREDENTIALS" ]; then
@@ -74,7 +104,7 @@ fi
 if [ -z "$IP" ] || [ "$IP" = "null" ] || [ "$IP" = "None" ]; then
 
     echo ""
-    echo "❌ Não foi possível obter o IP da VM $NODENUM."
+    echo "❌ Não foi possível obter o IP da VM ${NODENUM:-1}."
     echo ""
     echo "   A VM pode estar desligada. Ligue-a primeiro (opção Ligar)"
     echo "   e aguarde alguns segundos antes de conectar."

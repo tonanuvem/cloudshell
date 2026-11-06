@@ -84,13 +84,30 @@ destruir_ou_refazer() {
     echo " C) Cancelar"
     echo ""
 
-    local OP CONFIRMA RC
+    local OP CONFIRMA RC LOTE QTD_LOTE
+    local -a LOTES_D=()
 
     read -rp "Escolha [D/R/L/C]: " OP
 
     case "$OP" in
 
         [Dd])
+            aws_require || return 1
+
+            # Com mais de um lote (criar-varias.sh com sufixo), o
+            # destruir.sh sozinho mexeria SO no lote padrao e deixaria
+            # os outros de pe sem avisar. O destruir-varias.sh lista os
+            # lotes, aceita um ou todos e apaga o state de cada um.
+            mapfile -t LOTES_D < <(tf_list_batches "$CURRENT_PROJECT")
+
+            if [ "${#LOTES_D[@]}" -gt 1 ]; then
+                echo ""
+                echo "Há ${#LOTES_D[@]} lotes deste projeto no ambiente."
+                echo "Escolha o lote (ou TODOS) na lista a seguir."
+                "$BIN_DIR/destruir-varias.sh"
+                return $?
+            fi
+
             read -rp "Confirma DESTRUIR tudo? (s/N): " CONFIRMA
             [[ "$CONFIRMA" =~ ^[Ss]$ ]] || { echo "Cancelado."; return 0; }
 
@@ -98,23 +115,46 @@ destruir_ou_refazer() {
             ;;
 
         [Rr])
+            aws_require || return 1
+
+            # Refazer age em UM lote (um state) por vez. Com varios, o
+            # aluno escolhe; com um so, o tf_pick_batch nao pergunta.
+            prepare_tools_tf >/dev/null 2>&1
+
+            tf_pick_batch "$CURRENT_PROJECT" || return 0
+            LOTE="$TF_PICK_BATCH"
+
+            # Quantas VMs o lote tem hoje: sem isto, o criar.sh usa o
+            # default da variavel (1) e um lote de 5 VMs voltaria com
+            # uma, silenciosamente.
+            QTD_LOTE="$(tf_batch_size "$CURRENT_PROJECT" "$LOTE")"
+
             echo ""
-            echo "Refazer vai DESTRUIR a VM atual e criar uma nova do zero."
+            echo "Refazer vai DESTRUIR e recriar do zero:"
+            echo "   projeto : $CURRENT_PROJECT"
+            echo "   lote    : ${LOTE:-(padrão)}"
+            echo "   VMs     : ${QTD_LOTE:-1}"
+            echo ""
             read -rp "Confirma REFAZER? (s/N): " CONFIRMA
             [[ "$CONFIRMA" =~ ^[Ss]$ ]] || { echo "Cancelado."; return 0; }
-
-            aws_require || return 1
 
             echo ""
             echo ">> Destruindo ambiente atual..."
             echo ""
-            "$BIN_DIR/destruir.sh" "$CURRENT_PROJECT"
+            "$BIN_DIR/destruir.sh" "$CURRENT_PROJECT" "$LOTE"
 
             echo ""
             echo ">> Recriando ambiente..."
             echo ""
             reset_known_hosts
-            "$BIN_DIR/criar.sh" "$CURRENT_PROJECT"
+
+            if [ -n "$QTD_LOTE" ]; then
+                TF_VAR_quantidade="$QTD_LOTE" \
+                    "$BIN_DIR/criar.sh" "$CURRENT_PROJECT" "$LOTE"
+            else
+                "$BIN_DIR/criar.sh" "$CURRENT_PROJECT" "$LOTE"
+            fi
+
             RC=$?
 
             echo ""
@@ -237,14 +277,19 @@ while true; do
     case "$OPCAO" in
 
         1)
-            # Liga so a VM do lab, ciente do estado (sem perguntar
-            # numero e sem religar o que ja esta ligado).
+            # Liga as VMs do lab, ciente do estado (sem religar o que
+            # ja esta ligado). Com mais de uma VM no ambiente, o
+            # vm_pick deixa escolher -- ENTER aceita "todas", que e o
+            # que a turma quer na maioria das aulas. Com uma VM so,
+            # nao pergunta nada.
             if aws_require; then
                 echo ""
                 echo "========================================"
                 echo " LIGAR VM"
                 echo "========================================"
-                vm_start
+                if vm_pick "Ligar" all todas; then
+                    vm_start "${VM_PICK_IDS[@]}"
+                fi
             fi
             pause_menu
             ;;
@@ -255,15 +300,20 @@ while true; do
                 echo "========================================"
                 echo " SUSPENDER VM"
                 echo "========================================"
-                vm_stop
+                if vm_pick "Suspender" all todas; then
+                    vm_stop "${VM_PICK_IDS[@]}"
+                fi
             fi
             pause_menu
             ;;
 
         3)
+            # Sem o "1" fixo: o conectar.sh escolhe a VM (ou pergunta,
+            # se houver mais de uma em execucao). Antes, com vários
+            # lotes, esta opcao so alcancava a primeira VM.
             if aws_require; then
                 echo ""
-                "$BIN_DIR/conectar.sh" "$CURRENT_PROJECT" 1
+                "$BIN_DIR/conectar.sh" "$CURRENT_PROJECT"
             fi
             pause_menu
             ;;

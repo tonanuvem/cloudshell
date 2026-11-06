@@ -1017,13 +1017,21 @@ show_vm_status() {
 # ligar/suspender o que ja esta no estado desejado.
 # ============================================================
 
+# Uma linha por VM do lab nao-terminada:
+#
+#     ID <TAB> ESTADO <TAB> NOME <TAB> IP_PUBLICO
+#
+# O IP entrou como 4a coluna para o vm_pick poder mostrar a VM do
+# jeito que o aluno a reconhece (nome + IP), sem uma segunda ida a
+# AWS. Campos ausentes vem como "None".
 fiaplab_instances() {
 
     aws ec2 describe-instances \
         --filters "Name=tag:Name,Values=${FIAPLAB_NAME_FILTER}" \
                   "Name=instance-state-name,Values=pending,running,stopping,stopped,rebooting" \
-        --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Name`]|[0].Value]' \
-        --output text 2>/dev/null
+        --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Name`]|[0].Value,PublicIpAddress]' \
+        --output text 2>/dev/null |
+    sort -t"$(printf '\t')" -k3,3
 }
 
 # IPs publicos de TODAS as VMs do fiaplab em execucao (via AWS CLI).
@@ -1052,13 +1060,22 @@ fiaplab_running_name_ip() {
         --output text 2>/dev/null | grep -vE '^[[:space:]]*$' | sort -t"$(printf '\t')" -k1,1
 }
 
+# vm_start [ID...] / vm_stop [ID...]
+#
+# Sem argumentos, agem em TODAS as VMs do lab -- o default historico
+# e o que a turma quer na maioria das aulas. Com ids, agem so neles:
+# e por aqui que o menu passa a escolha do vm_pick quando existe mais
+# de uma VM. O estado continua sendo lido da AWS nos dois casos, para
+# nao religar o que ja esta ligado nem suspender o que ja parou.
 vm_start() {
 
-    local ID STATE NAME
+    local ID STATE NAME IP
     local -a ALVO=()
+    local FILTRO=" $* "
 
-    while IFS=$'\t' read -r ID STATE NAME; do
+    while IFS=$'\t' read -r ID STATE NAME IP; do
         [ -z "$ID" ] && continue
+        [ "$#" -eq 0 ] || [[ "$FILTRO" == *" $ID "* ]] || continue
         case "$STATE" in
             running)  echo "✅ ${NAME:-$ID} já está ligada." ;;
             pending)  echo "⏳ ${NAME:-$ID} já está iniciando." ;;
@@ -1081,11 +1098,13 @@ vm_start() {
 
 vm_stop() {
 
-    local ID STATE NAME
+    local ID STATE NAME IP
     local -a ALVO=()
+    local FILTRO=" $* "
 
-    while IFS=$'\t' read -r ID STATE NAME; do
+    while IFS=$'\t' read -r ID STATE NAME IP; do
         [ -z "$ID" ] && continue
+        [ "$#" -eq 0 ] || [[ "$FILTRO" == *" $ID "* ]] || continue
         case "$STATE" in
             stopped|stopping) echo "✅ ${NAME:-$ID} já está suspensa." ;;
             *)                ALVO+=("$ID") ;;
@@ -1103,6 +1122,228 @@ vm_stop() {
     aws ec2 stop-instances --instance-ids "${ALVO[@]}" >/dev/null 2>&1 \
         && echo "✅ Comando enviado." \
         || { echo "❌ Erro ao suspender."; return 1; }
+}
+
+
+# ============================================================
+# vm_pick : escolhe em QUAL VM do lab a acao vai agir
+#
+# O menu nasceu com uma VM so por aluno. Com o criar-varias.sh
+# (varios lotes, fiaplab-N-<lote>) as acoes passaram a agir em
+# todas -- o que esta certo para ligar/suspender/credenciais -- e
+# o Conectar ficou preso no no 1, sem jeito de alcancar as outras.
+#
+# Regra: com UMA VM nao pergunta nada, exatamente como antes. Com
+# duas ou mais, lista e deixa escolher. O menu e a escolha saem no
+# stderr e o resultado vem nos arrays globais (mesmo padrao do
+# tf_write_inventory/INVENTORY_FILE), para a funcao poder ser
+# chamada sem subshell e ainda interagir com o aluno.
+#
+# Uso:
+#     vm_pick "Ligar" all     todas   || return 0
+#     vm_pick "Conectar" running ""    || return 0
+#     vm_start "${VM_PICK_IDS[@]}"
+#
+#   <rotulo>  verbo da acao, so para o prompt
+#   <estado>  "all" (default) ou "running"
+#   <default> "todas" (ENTER = todas) ou "" (exige escolha)
+#
+# Retorna 0 com VM_PICK_* preenchidos, 1 se cancelou ou nao ha VM.
+# ============================================================
+
+VM_PICK_IDS=()
+VM_PICK_NAMES=()
+VM_PICK_IPS=()
+
+vm_pick() {
+
+    local ROTULO="${1:-Aplicar}"
+    local ESTADO="${2:-all}"
+    # ${3-todas} (sem os dois-pontos): um "" explicito do chamador tem
+    # de valer "sem default", e nao cair no valor padrao -- e o que o
+    # conectar.sh usa para exigir a escolha de UMA VM.
+    local DEFAULT="${3-todas}"
+
+    local ID STATE NAME IP ESC i
+    local -a IDS=() STATES=() NAMES=() IPS=()
+
+    VM_PICK_IDS=()
+    VM_PICK_NAMES=()
+    VM_PICK_IPS=()
+
+    while IFS=$'\t' read -r ID STATE NAME IP; do
+        [ -n "$ID" ] || continue
+        [ "$ESTADO" != "running" ] || [ "$STATE" = "running" ] || continue
+        IDS+=("$ID")
+        STATES+=("$STATE")
+        NAMES+=("${NAME:-$ID}")
+        IPS+=("$IP")
+    done < <(fiaplab_instances)
+
+    # ---- nenhuma ----
+    if [ "${#IDS[@]}" -eq 0 ]; then
+        if [ "$ESTADO" = "running" ]; then
+            echo "❌ Nenhuma VM do lab em execução. Use 1) Ligar VM." >&2
+        else
+            echo "❌ Nenhuma VM do lab encontrada." >&2
+        fi
+        return 1
+    fi
+
+    # ---- uma so: caminho antigo, sem prompt ----
+    if [ "${#IDS[@]}" -eq 1 ]; then
+        VM_PICK_IDS=("${IDS[0]}")
+        VM_PICK_NAMES=("${NAMES[0]}")
+        VM_PICK_IPS=("${IPS[0]}")
+        return 0
+    fi
+
+    # ---- duas ou mais: pergunta ----
+    {
+        echo ""
+        echo "Há ${#IDS[@]} VMs do lab no ambiente:"
+        echo ""
+
+        for i in "${!IDS[@]}"; do
+            printf '  %d) %-22s %-9s %s\n' \
+                "$((i + 1))" "${NAMES[$i]}" "${STATES[$i]}" \
+                "$([ "${IPS[$i]}" = "None" ] && echo "-" || echo "${IPS[$i]}")"
+        done
+
+        echo ""
+        if [ "$DEFAULT" = "todas" ]; then
+            echo "  T) TODAS      C) Cancelar"
+        else
+            echo "  C) Cancelar"
+        fi
+        echo ""
+    } >&2
+
+    if [ "$DEFAULT" = "todas" ]; then
+        read -rp "$ROTULO qual? [T = todas]: " ESC
+        [ -n "$ESC" ] || ESC="T"
+    else
+        read -rp "$ROTULO qual? [1-${#IDS[@]}]: " ESC
+    fi
+
+    case "$ESC" in
+
+        [Tt])
+            if [ "$DEFAULT" != "todas" ]; then
+                echo "❌ Escolha uma VM pelo número." >&2
+                return 1
+            fi
+            VM_PICK_IDS=("${IDS[@]}")
+            VM_PICK_NAMES=("${NAMES[@]}")
+            VM_PICK_IPS=("${IPS[@]}")
+            return 0
+            ;;
+
+        [Cc]|"")
+            echo "Cancelado." >&2
+            return 1
+            ;;
+
+        *)
+            if [[ "$ESC" =~ ^[0-9]+$ ]] &&
+               [ "$ESC" -ge 1 ] && [ "$ESC" -le "${#IDS[@]}" ]; then
+                i=$((ESC - 1))
+                VM_PICK_IDS=("${IDS[$i]}")
+                VM_PICK_NAMES=("${NAMES[$i]}")
+                VM_PICK_IPS=("${IPS[$i]}")
+                echo "   → ${NAMES[$i]}" >&2
+                return 0
+            fi
+            echo "❌ Opção inválida." >&2
+            return 1
+            ;;
+    esac
+}
+
+
+# ============================================================
+# tf_pick_batch : escolhe UM lote do projeto
+#
+# Mesma regra do vm_pick: com um lote so nao pergunta nada. Serve
+# ao Refazer, que precisa de um lote (um state) por vez -- destruir
+# varios de uma vez ja e trabalho do destruir-varias.sh.
+#
+# Define TF_PICK_BATCH (vazio = lote padrao). Retorna 1 se cancelou
+# ou se nao ha lote nenhum.
+# ============================================================
+
+TF_PICK_BATCH=""
+
+tf_pick_batch() {
+
+    local PROJECT="$1"
+    local ESC i
+    local -a LOTES=()
+
+    TF_PICK_BATCH=""
+
+    # mapfile: o lote padrao vem do tf_list_batches como linha vazia.
+    mapfile -t LOTES < <(tf_list_batches "$PROJECT")
+
+    if [ "${#LOTES[@]}" -eq 0 ]; then
+        echo "❌ Nenhum lote encontrado (nenhum state em $PROJECT/ no S3)." >&2
+        return 1
+    fi
+
+    if [ "${#LOTES[@]}" -eq 1 ]; then
+        TF_PICK_BATCH="${LOTES[0]}"
+        return 0
+    fi
+
+    {
+        echo ""
+        echo "Há ${#LOTES[@]} lotes do projeto $PROJECT:"
+        echo ""
+        for i in "${!LOTES[@]}"; do
+            echo "  $((i + 1))) ${LOTES[$i]:-(padrão)}"
+        done
+        echo ""
+        echo "  C) Cancelar"
+        echo ""
+    } >&2
+
+    read -rp "Qual lote? [1-${#LOTES[@]}]: " ESC
+
+    if [[ "$ESC" =~ ^[0-9]+$ ]] &&
+       [ "$ESC" -ge 1 ] && [ "$ESC" -le "${#LOTES[@]}" ]; then
+        TF_PICK_BATCH="${LOTES[$((ESC - 1))]}"
+        echo "   → lote ${TF_PICK_BATCH:-(padrão)}" >&2
+        return 0
+    fi
+
+    case "$ESC" in
+        [Cc]|"") echo "Cancelado." >&2 ;;
+        *)       echo "❌ Opção inválida." >&2 ;;
+    esac
+
+    return 1
+}
+
+
+# ============================================================
+# tf_batch_size : quantas instancias o state do lote tem
+#
+# O Refazer precisa disto: o criar.sh sem TF_VAR_quantidade cria
+# UMA VM, entao refazer um lote de 5 o encolheria para 1 sem avisar.
+# ============================================================
+
+tf_batch_size() {
+
+    local PROJECT="$1" SUFIXO="$2" N
+
+    tf_init "$PROJECT" "$SUFIXO" >/dev/null 2>&1 || return 1
+
+    N=$(tf_instance_ids "$PROJECT" | grep -v '^[[:space:]]*$' | wc -l)
+
+    [[ "$N" =~ ^[0-9]+$ ]] || return 1
+    [ "$N" -gt 0 ]         || return 1
+
+    echo "$N"
 }
 
 
